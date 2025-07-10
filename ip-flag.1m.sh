@@ -1,6 +1,5 @@
 
 #!/usr/bin/env bash
-
 # <xbar.title>Network info</xbar.title>
 # <xbar.version>v1.0</xbar.version>
 # <xbar.author>François Rousselet</xbar.author>
@@ -44,7 +43,7 @@ case "$lang" in
     menu_tailscale="Tailscale"
     menu_pairs="Pairs"
     menu_ts_exit_config="Exit node configuré"
-    menu_ts_exit_active="Tailscale exit node"
+    menu_ts_exit_active="Exit node"
     menu_ts_admin="→ Ouvrir dans la console d'administration Tailscale"
     menu_host_name="Nom d'hôte"
     ;;
@@ -74,7 +73,7 @@ case "$lang" in
     menu_tailscale="Tailscale"
     menu_pairs="Pairs"
     menu_ts_exit_config="Exit node configured"
-    menu_ts_exit_active="Tailscale exit node"
+    menu_ts_exit_active="Exit node"
     menu_ts_admin="→ Open in Tailscale Admin Console"
     menu_host_name="Host name"
     ;;
@@ -170,7 +169,7 @@ fi
 # --- SwiftBar / xbar display ---
 echo "${network_icon}  ${asn_org_f}"
 echo "---"
-echo "| image=${image_enc} refresh=true"
+echo "| image=${image_enc}"
 # echo "---"
 
 # Show ASN operator name and clickable AS numbers
@@ -280,17 +279,22 @@ else
 fi
 
 # Network information
-echo "${menu_network}"
-[[ -n "$(hostname)" ]] && echo "${menu_host_name} : $(hostname) | refresh=true"
+network_lines=()
+[[ -n "$(hostname)" ]] && network_lines+=("${menu_host_name} : $(hostname) | refresh=true")
 # --- Search domains ---
 search_domains=$(scutil --dns | awk -F': ' '/search domain\[[0-9]+\]/ {print $2}' | sort -u)
 sd=$(echo "$search_domains" | tr '\n' ',' | sed 's/,$//; s/,/ • /g')
 if [[ -n "$sd" ]]; then
-  echo "${menu_search_domains} : $sd | refresh=true"
+  network_lines+=("${menu_search_domains} : $sd | refresh=true")
+fi
+if [[ ${#network_lines[@]} -gt 0 ]]; then
+  echo "${menu_network}"
+  printf "%s\n" "${network_lines[@]}"
   echo "---"
 fi
-echo "${menu_ipv6}"
-[[ -n "$pub_ip6" ]] && echo "${menu_pub_ipv6} : $pub_ip6 | refresh=true"
+
+ipv6_lines=()
+[[ -n "$pub_ip6" ]] && ipv6_lines+=("${menu_pub_ipv6} : $pub_ip6 | refresh=true")
 # --- Local interface addresses ---
 for ifc in $(networksetup -listallhardwareports | awk '/Device: / {print $2}' | sort); do
   ip6_lines=$(ifconfig "$ifc" 2>/dev/null | awk '
@@ -308,29 +312,36 @@ for ifc in $(networksetup -listallhardwareports | awk '/Device: / {print $2}' | 
     }
   ')
   while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ -n "$line" ]] && echo "${menu_ipv6} ($ifc) : $line | refresh=true"
+    [[ -n "$line" ]] && ipv6_lines+=("${menu_ipv6} ($ifc) : $line | refresh=true")
   done <<< "$ip6_lines"
 done
-[[ -n "$ts_ip6"  ]] && echo "${menu_ipv6} (Tailscale) : $ts_ip6 | refresh=true"
-[[ -n "$dns6"    ]] && echo "${menu_dns_ipv6} : $dns6 | refresh=true"
-[[ -n "$gw6"     ]] && echo "${menu_gateway_ipv6} : $gw6 | refresh=true"
-[[ -n "$hostname6" ]] && echo "${menu_host_ipv6} : $hostname6 | refresh=true"
-echo "---"
-echo "${menu_ipv4}"
-[[ -n "$pub_ip4" ]] && echo "${menu_pub_ipv4} : $pub_ip4 | refresh=true"
+[[ -n "$dns6"    ]] && ipv6_lines+=("${menu_dns_ipv6} : $dns6 | refresh=true")
+[[ -n "$gw6"     ]] && ipv6_lines+=("${menu_gateway_ipv6} : $gw6 | refresh=true")
+[[ -n "$hostname6" ]] && ipv6_lines+=("${menu_host_ipv6} : $hostname6 | refresh=true")
+if [[ ${#ipv6_lines[@]} -gt 0 ]]; then
+  echo "${menu_ipv6}"
+  printf "%s\n" "${ipv6_lines[@]}"
+  echo "---"
+fi
+
+ipv4_lines=()
+[[ -n "$pub_ip4" ]] && ipv4_lines+=("${menu_pub_ipv4} : $pub_ip4 | refresh=true")
 for ifc in $(networksetup -listallhardwareports | awk '/Device: / {print $2}' | sort); do
   ip4=$(ipconfig getifaddr "$ifc" 2>/dev/null)
-  [[ -n "$ip4" ]] && echo "${menu_ipv4} ($ifc) : $ip4 | refresh=true"
+  [[ -n "$ip4" ]] && ipv4_lines+=("${menu_ipv4} ($ifc) : $ip4 | refresh=true")
 done
-[[ -n "$ts_ip4"  ]] && echo "${menu_ipv4} (Tailscale) : $ts_ip4 | refresh=true"
-[[ -n "$dns4"    ]] && echo "${menu_dns_ipv4} : $dns4 | refresh=true"
-[[ -n "$gw4"     ]] && echo "${menu_gateway_ipv4} : $gw4 | refresh=true"
-[[ -n "$hostname4" ]] && echo "${menu_host_ipv4} : $hostname4 | refresh=true"
+[[ -n "$dns4"    ]] && ipv4_lines+=("${menu_dns_ipv4} : $dns4 | refresh=true")
+[[ -n "$gw4"     ]] && ipv4_lines+=("${menu_gateway_ipv4} : $gw4 | refresh=true")
+[[ -n "$hostname4" ]] && ipv4_lines+=("${menu_host_ipv4} : $hostname4 | refresh=true")
+if [[ ${#ipv4_lines[@]} -gt 0 ]]; then
+  echo "${menu_ipv4}"
+  printf "%s\n" "${ipv4_lines[@]}"
+fi
 
 # --- Wi-Fi information ---
+wifi_lines=()
 ssid=$(ipconfig getsummary en0 | awk -F ' SSID : ' '/ SSID : / {print $2}')
 if [[ -n "$ssid" ]]; then
-  echo "---"
   sp_info=$(system_profiler SPAirPortDataType 2>/dev/null)
   phy=$(echo "$sp_info" | awk -F': ' '/PHY Mode:/{print $2; exit}')
   case "$phy" in
@@ -342,11 +353,16 @@ if [[ -n "$ssid" ]]; then
     "802.11ax") wifi_ver="Wi-Fi 6" ;;
     *) wifi_ver="$phy" ;;
   esac
-  echo "${menu_wifi} : $ssid • $wifi_ver ($phy) | refresh=true"
+  wifi_lines+=("${menu_wifi} : $ssid • $wifi_ver ($phy) | refresh=true")
+fi
+if [[ ${#wifi_lines[@]} -gt 0 ]]; then
+  echo "---"
+  printf "%s\n" "${wifi_lines[@]}"
 fi
 
 # --- Tailscale status ---
 if command -v tailscale &>/dev/null; then
+  ts_lines=()
   # Machine tags
   ts_tags=$(echo "$ts_json" | jq -r '.Self.Tags // empty | join(", ")')
   # Online status
@@ -375,10 +391,10 @@ if command -v tailscale &>/dev/null; then
     active_exit_ip=$(echo "$ts_json" | jq -r --arg id "$exit_node_id" '.Peer[] | select(.ID == $id) | .TailscaleIPs[]? | select(test(":") | not)')
   fi
 
-  echo "---"
-  echo "${menu_tailscale}"
+  [[ -n "$ts_ip6"  ]] && ts_lines+=("${menu_ipv6} : $ts_ip6 | refresh=true")
+  [[ -n "$ts_ip4"  ]] && ts_lines+=("${menu_ipv4} : $ts_ip4 | refresh=true")
   if [[ "${skip_derp:-}" != true ]]; then
-    # Map DERP relay to ISO country code
+    # Map DERP relay to ISO country code (static mapping)
     derp_to_iso() {
       case "$1" in
         PAR) echo "FR";;
@@ -410,40 +426,54 @@ if command -v tailscale &>/dev/null; then
         code=$((127397 + ord))
         relay_flag+=$(perl -CO -e "print chr($code)")
       done
-      echo "${menu_derp} : ${rc_upper} ${relay_flag} | refresh=true"
+      ts_lines+=("${menu_derp} : ${rc_upper} ${relay_flag} | refresh=true")
     fi
   fi
 
-# --- Tailscale pairs in text mode ---
-ts_status=$(tailscale status 2>/dev/null)
-if [[ -n "$ts_status" ]]; then
-  echo "${menu_pairs}"
-  echo "$ts_status" | awk -v active_exit_ip="$active_exit_ip" '
-    NF > 4 {
-      ip=$1; name=$2; user=$3; os=$4; status="";
-      for(i=5;i<=NF;++i) status=status" "$i;
-      gsub(/^ /, "", status);
-      icon="";
-      exiticon="";
-      offlineicon="";
-      opts="";
-      if (status ~ /direct/) icon="􀄭 ";
-      # Show open door if this IP is the current exit node in use, else closed door if it offers an exit node
-      if (ip == active_exit_ip && status ~ /exit node/) {
-        exiticon="􁏜 ";
-      } else if (status ~ /offers exit node/) {
-        exiticon="􁏝 ";
-      }
-      if (status ~ /offline/) offlineicon="􀇿 ";
-      if (status ~ /offline/ || status ~ /idle/) opts=""; else opts=" | refresh=true";
-      if (status != "-")
-        print "--" offlineicon exiticon icon name " [" ip "] | href=https://login.tailscale.com/admin/machines/" ip opts;
-    }
-  '
-fi
-  [[ -n "$ts_tags" ]] && echo "${menu_tags} : $ts_tags | refresh=true"
-  [[ -n "$ts_exit_node" && "$ts_exit_node" != "none" ]] && echo "${menu_ts_exit_config} : $ts_exit_node | refresh=true"
-  [[ -n "$exit_node_used" ]] && echo "${menu_ts_exit_active} : $exit_node_used | refresh=true"
-  [[ -n "$ts_ip4" ]] && echo "${menu_ts_admin} | href=https://login.tailscale.com/admin/machines/$ts_ip4 refresh=true"
+  # --- Tailscale pairs in text mode ---
+  ts_status=$(tailscale status 2>/dev/null)
+  ts_peers_lines=()
+  if [[ -n "$ts_status" ]]; then
+    while IFS= read -r ts_line; do
+      awk_line=$(echo "$ts_line" | awk -v active_exit_ip="$active_exit_ip" '
+        NF > 4 {
+          ip=$1; name=$2; user=$3; os=$4; status="";
+          for(i=5;i<=NF;++i) status=status" "$i;
+          gsub(/^ /, "", status);
+          icon="";
+          exiticon="";
+          offlineicon="";
+          opts="";
+          if (status ~ /direct/) {
+            icon="􀄭 ";
+          } else if (status !~ /offline/ && status !~ /idle/) {
+            icon="􀅌 ";
+          }
+          # Show open door if this IP is the current exit node in use, else closed door if it offers an exit node
+          if (ip == active_exit_ip && status ~ /exit node/) {
+            exiticon="􁏜 ";
+          } else if (status ~ /offers exit node/) {
+            exiticon="􁏝 ";
+          }
+          if (status ~ /offline/) offlineicon="􀇿 ";
+          if (status ~ /offline/ || status ~ /idle/) opts=""; else opts=" | refresh=true";
+          if (status != "-")
+            printf "--%s%s%s%s [%s] | href=https://login.tailscale.com/admin/machines/%s%s", offlineicon, exiticon, icon, name, ip, ip, opts;
+        }
+      ')
+      [[ -n "$awk_line" ]] && ts_peers_lines+=("$awk_line")
+    done <<< "$ts_status"
+  fi
 
+  if [[ ${#ts_peers_lines[@]} -gt 0 ]]; then
+    ts_lines+=("${menu_pairs}")
+    for peer_line in "${ts_peers_lines[@]}"; do
+      ts_lines+=("$peer_line")
+    done
+  fi
+  if [[ ${#ts_lines[@]} -gt 0 ]]; then
+    echo "---"
+    echo "${menu_tailscale}"
+    printf "%s\n" "${ts_lines[@]}"
+  fi
 fi
