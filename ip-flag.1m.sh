@@ -1,18 +1,84 @@
+
 #!/usr/bin/env bash
 
-# <xbar.title>External IP country flag emoji</xbar.title>
-# <xbar.version>v1.5 beta 1</xbar.version>
+# <xbar.title>Network info</xbar.title>
+# <xbar.version>v1.0</xbar.version>
 # <xbar.author>François Rousselet</xbar.author>
 # <xbar.author.github>frousselet</xbar.author.github>
-# <xbar.desc>Displays network information, icluding Tailscale status</xbar.desc>
-# <xbar.dependencies>bash,curl,jq,whois,base64</xbar.dependencies>
-
-# SwiftBar flags
+# <xbar.desc>Display network information on the macOS menu bar</xbar.desc>
+# <xbar.dependencies>OS X 10.11</xbar.dependencies>
 # <swiftbar.hideAbout>true</swiftbar.hideAbout>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 # <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>
+
+# --- Detect system language ---
+lang=$(defaults read -g AppleLanguages | awk -F'"' 'NR==2{print $2}' | cut -d'-' -f1)
+
+# --- Define translations (FR/EN) ---
+case "$lang" in
+  fr)
+    menu_external_ip="IP Publique"
+    menu_city="Ville"
+    menu_country="Pays"
+    menu_timezone="Fuseau horaire"
+    menu_open_in_maps="→ Ouvrir dans Apple Plans 􀙊"
+    menu_network="Réseau"
+    menu_ipv4="IPv4"
+    menu_ipv6="IPv6"
+    menu_local_ipv4="IPv4 (Locale)"
+    menu_local_ipv6="IPv6 (Locale)"
+    menu_pub_ipv4="IPv4 (Publique)"
+    menu_pub_ipv6="IPv6 (Publique)"
+    menu_dns_ipv4="DNS IPv4"
+    menu_dns_ipv6="DNS IPv6"
+    menu_gateway_ipv4="Passerelles IPv4"
+    menu_gateway_ipv6="Passerelles IPv6"
+    menu_host_ipv4="Hôte IPv4"
+    menu_host_ipv6="Hôte IPv6"
+    menu_tags="Tags"
+    menu_wifi="Wi-Fi"
+    menu_search_domains="Domaines"
+    menu_derp="DERP"
+    menu_tailscale="Tailscale"
+    menu_pairs="Pairs"
+    menu_ts_exit_config="Exit node configuré"
+    menu_ts_exit_active="Tailscale exit node"
+    menu_ts_admin="→ Ouvrir dans la console d'administration Tailscale"
+    menu_host_name="Nom d'hôte"
+    ;;
+  *)
+    menu_external_ip="External IP"
+    menu_city="City"
+    menu_country="Country"
+    menu_timezone="Time zone"
+    menu_open_in_maps="→ Open in Apple Maps 􀙊"
+    menu_network="Network"
+    menu_ipv4="IPv4"
+    menu_ipv6="IPv6"
+    menu_local_ipv4="IPv4 (Local)"
+    menu_local_ipv6="IPv6 (Local)"
+    menu_pub_ipv4="IPv4 (Public)"
+    menu_pub_ipv6="IPv6 (Public)"
+    menu_dns_ipv4="IPv4 DNS"
+    menu_dns_ipv6="IPv6 DNS"
+    menu_gateway_ipv4="IPv4 gateways"
+    menu_gateway_ipv6="IPv6 gateways"
+    menu_host_ipv4="IPv4 host"
+    menu_host_ipv6="IPv6 host"
+    menu_tags="Tags"
+    menu_wifi="Wi-Fi"
+    menu_search_domains="Search domains"
+    menu_derp="DERP"
+    menu_tailscale="Tailscale"
+    menu_pairs="Pairs"
+    menu_ts_exit_config="Exit node configured"
+    menu_ts_exit_active="Tailscale exit node"
+    menu_ts_admin="→ Open in Tailscale Admin Console"
+    menu_host_name="Host name"
+    ;;
+esac
 
 # --- Fetch IP info ---
 json4=$(curl -4 -s http://ifconfig.co/json)
@@ -110,34 +176,33 @@ echo "| image=${image_enc} refresh=true"
 # Show ASN operator name and clickable AS numbers
 asn4=$(jq -r '.asn // empty' <<<"$json4")
 asn6=$(jq -r '.asn // empty' <<<"$json6")
-echo "${asn_org} | refresh=true"
 if [[ -n "$asn4" && -n "$asn6" ]]; then
   if [[ "$asn4" == "$asn6" ]]; then
-    echo "ASN : $asn4 | href=https://whois.ipinsight.io/$asn4 refresh=true"
+    echo "${asn_org} • $asn4 | href=https://whois.ipinsight.io/$asn4 refresh=true"
   else
-    echo "ASN : $asn6 • $asn4 | href=https://whois.ipinsight.io/$asn6 refresh=true"
+    echo "${asn_org} • $asn6 • $asn4 | href=https://whois.ipinsight.io/$asn6 refresh=true"
   fi
 elif [[ -n "$asn4" ]]; then
-  echo "ASN : $asn4 | href=https://whois.ipinsight.io/$asn4 refresh=true"
+  echo "${asn_org} • $asn4 | href=https://whois.ipinsight.io/$asn4 refresh=true"
 elif [[ -n "$asn6" ]]; then
-  echo "ASN : $asn6 | href=https://whois.ipinsight.io/$asn6 refresh=true"
+  echo "${asn_org} • $asn6 | href=https://whois.ipinsight.io/$asn6 refresh=true"
 fi
 echo "---"
-[[ -n "$city"   ]] && echo "Ville : $city | refresh=true"
+[[ -n "$city"   ]] && echo "${menu_city} : $city | refresh=true"
 if [[ -n "$country" ]]; then
   if [[ "$country_eu" == "true" ]]; then
-    echo "Pays : $country $flag 🇪🇺 | refresh=true"
+    echo "${menu_country} : $country $flag 🇪🇺 | refresh=true"
   else
-    echo "Pays : $country $flag | refresh=true"
+    echo "${menu_country} : $country $flag | refresh=true"
   fi
 fi
-[[ -n "$tz"     ]] && echo "Fuseau horaire : $tz | refresh=true"
+[[ -n "$tz"     ]] && echo "${menu_timezone} : $tz | refresh=true"
 echo
 if [[ -n "$city" || -n "$country" ]]; then
   query=$(printf '%s %s' "$city" "$country" \
     | tr '[:upper:]' '[:lower:]' \
     | sed 's/ /%20/g')
-  echo "→ Ouvrir dans Apple Plans | href=maps://?q=${query} refresh=true"
+  echo "${menu_open_in_maps} | href=maps://?q=${query} refresh=true"
 fi
 
 # --- DNS servers ---
@@ -215,15 +280,17 @@ else
 fi
 
 # Network information
-[[ -n "$(hostname)" ]] && echo "Nom d'hôte : $(hostname) | refresh=true"
+echo "${menu_network}"
+[[ -n "$(hostname)" ]] && echo "${menu_host_name} : $(hostname) | refresh=true"
 # --- Search domains ---
 search_domains=$(scutil --dns | awk -F': ' '/search domain\[[0-9]+\]/ {print $2}' | sort -u)
 sd=$(echo "$search_domains" | tr '\n' ',' | sed 's/,$//; s/,/ • /g')
 if [[ -n "$sd" ]]; then
-  echo "Domaines de recherche : $sd | refresh=true"
+  echo "${menu_search_domains} : $sd | refresh=true"
   echo "---"
 fi
-[[ -n "$pub_ip6" ]] && echo "IPv6 (Publique) : $pub_ip6 | refresh=true"
+echo "${menu_ipv6}"
+[[ -n "$pub_ip6" ]] && echo "${menu_pub_ipv6} : $pub_ip6 | refresh=true"
 # --- Local interface addresses ---
 for ifc in $(networksetup -listallhardwareports | awk '/Device: / {print $2}' | sort); do
   ip6_lines=$(ifconfig "$ifc" 2>/dev/null | awk '
@@ -241,23 +308,24 @@ for ifc in $(networksetup -listallhardwareports | awk '/Device: / {print $2}' | 
     }
   ')
   while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ -n "$line" ]] && echo "IPv6 ($ifc) : $line | refresh=true"
+    [[ -n "$line" ]] && echo "${menu_ipv6} ($ifc) : $line | refresh=true"
   done <<< "$ip6_lines"
 done
-[[ -n "$ts_ip6"  ]] && echo "IPv6 (Tailscale) : $ts_ip6 | refresh=true"
-[[ -n "$dns6"    ]] && echo "DNS IPv6 : $dns6 | refresh=true"
-[[ -n "$gw6"     ]] && echo "Passerelle IPv6 : $gw6 | refresh=true"
-[[ -n "$hostname6" ]] && echo "Hôte IPv6 : $hostname6 | refresh=true"
+[[ -n "$ts_ip6"  ]] && echo "${menu_ipv6} (Tailscale) : $ts_ip6 | refresh=true"
+[[ -n "$dns6"    ]] && echo "${menu_dns_ipv6} : $dns6 | refresh=true"
+[[ -n "$gw6"     ]] && echo "${menu_gateway_ipv6} : $gw6 | refresh=true"
+[[ -n "$hostname6" ]] && echo "${menu_host_ipv6} : $hostname6 | refresh=true"
 echo "---"
-[[ -n "$pub_ip4" ]] && echo "IPv4 (Publique) : $pub_ip4 | refresh=true"
+echo "${menu_ipv4}"
+[[ -n "$pub_ip4" ]] && echo "${menu_pub_ipv4} : $pub_ip4 | refresh=true"
 for ifc in $(networksetup -listallhardwareports | awk '/Device: / {print $2}' | sort); do
   ip4=$(ipconfig getifaddr "$ifc" 2>/dev/null)
-  [[ -n "$ip4" ]] && echo "IPv4 ($ifc) : $ip4 | refresh=true"
+  [[ -n "$ip4" ]] && echo "${menu_ipv4} ($ifc) : $ip4 | refresh=true"
 done
-[[ -n "$ts_ip4"  ]] && echo "IPv4 (Tailscale) : $ts_ip4 | refresh=true"
-[[ -n "$dns4"    ]] && echo "DNS IPv4 : $dns4 | refresh=true"
-[[ -n "$gw4"     ]] && echo "Passerelle IPv4 : $gw4 | refresh=true"
-[[ -n "$hostname4" ]] && echo "Hôte IPv4 : $hostname4 | refresh=true"
+[[ -n "$ts_ip4"  ]] && echo "${menu_ipv4} (Tailscale) : $ts_ip4 | refresh=true"
+[[ -n "$dns4"    ]] && echo "${menu_dns_ipv4} : $dns4 | refresh=true"
+[[ -n "$gw4"     ]] && echo "${menu_gateway_ipv4} : $gw4 | refresh=true"
+[[ -n "$hostname4" ]] && echo "${menu_host_ipv4} : $hostname4 | refresh=true"
 
 # --- Wi-Fi information ---
 ssid=$(ipconfig getsummary en0 | awk -F ' SSID : ' '/ SSID : / {print $2}')
@@ -274,7 +342,7 @@ if [[ -n "$ssid" ]]; then
     "802.11ax") wifi_ver="Wi-Fi 6" ;;
     *) wifi_ver="$phy" ;;
   esac
-  echo "Wi-Fi : $ssid • $wifi_ver ($phy) | refresh=true"
+  echo "${menu_wifi} : $ssid • $wifi_ver ($phy) | refresh=true"
 fi
 
 # --- Tailscale status ---
@@ -301,7 +369,14 @@ if command -v tailscale &>/dev/null; then
       | jq -r --arg id "$exit_node_id" \
         '.Peer[] | select(.ID == $id) | .HostName // empty')
   fi
+
+  # Extract the Tailscale IP of the active exit node (if any)
+  if [[ -n "$exit_node_id" && -n "$ts_json" ]]; then
+    active_exit_ip=$(echo "$ts_json" | jq -r --arg id "$exit_node_id" '.Peer[] | select(.ID == $id) | .TailscaleIPs[]? | select(test(":") | not)')
+  fi
+
   echo "---"
+  echo "${menu_tailscale}"
   if [[ "${skip_derp:-}" != true ]]; then
     # Map DERP relay to ISO country code
     derp_to_iso() {
@@ -335,12 +410,40 @@ if command -v tailscale &>/dev/null; then
         code=$((127397 + ord))
         relay_flag+=$(perl -CO -e "print chr($code)")
       done
-      echo "DERP : ${rc_upper} ${relay_flag} | refresh=true"
+      echo "${menu_derp} : ${rc_upper} ${relay_flag} | refresh=true"
     fi
   fi
-  [[ -n "$ts_tags" ]] && echo "Tags : $ts_tags | refresh=true"
-  [[ -n "$ts_exit_node" && "$ts_exit_node" != "none" ]] && echo "Exit node configuré : $ts_exit_node | refresh=true"
-  [[ -n "$exit_node_used" ]] && echo "Tailscale exit node : $exit_node_used | refresh=true"
-  [[ -n "$ts_ip4" ]] && echo "→ Ouvrir dans la console d'administration Tailscale | href=https://login.tailscale.com/admin/machines/$ts_ip4 refresh=true"
+
+# --- Tailscale pairs in text mode ---
+ts_status=$(tailscale status 2>/dev/null)
+if [[ -n "$ts_status" ]]; then
+  echo "${menu_pairs}"
+  echo "$ts_status" | awk -v active_exit_ip="$active_exit_ip" '
+    NF > 4 {
+      ip=$1; name=$2; user=$3; os=$4; status="";
+      for(i=5;i<=NF;++i) status=status" "$i;
+      gsub(/^ /, "", status);
+      icon="";
+      exiticon="";
+      offlineicon="";
+      opts="";
+      if (status ~ /direct/) icon="􀄭 ";
+      # Show open door if this IP is the current exit node in use, else closed door if it offers an exit node
+      if (ip == active_exit_ip && status ~ /exit node/) {
+        exiticon="􁏜 ";
+      } else if (status ~ /offers exit node/) {
+        exiticon="􁏝 ";
+      }
+      if (status ~ /offline/) offlineicon="􀇿 ";
+      if (status ~ /offline/ || status ~ /idle/) opts=""; else opts=" | refresh=true";
+      if (status != "-")
+        print "--" offlineicon exiticon icon name " [" ip "] | href=https://login.tailscale.com/admin/machines/" ip opts;
+    }
+  '
+fi
+  [[ -n "$ts_tags" ]] && echo "${menu_tags} : $ts_tags | refresh=true"
+  [[ -n "$ts_exit_node" && "$ts_exit_node" != "none" ]] && echo "${menu_ts_exit_config} : $ts_exit_node | refresh=true"
+  [[ -n "$exit_node_used" ]] && echo "${menu_ts_exit_active} : $exit_node_used | refresh=true"
+  [[ -n "$ts_ip4" ]] && echo "${menu_ts_admin} | href=https://login.tailscale.com/admin/machines/$ts_ip4 refresh=true"
 
 fi
