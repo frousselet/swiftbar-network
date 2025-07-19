@@ -513,13 +513,30 @@ if [[ ${#ipv4_lines[@]} -gt 0 ]]; then
 fi
 
 #
-# Wi-Fi section: display current SSID and Wi-Fi version (e.g., Wi-Fi 5, Wi-Fi 6), if connected.
+# Wi-Fi section: display current SSID, Wi-Fi version, frequency, signal strength (RSSI in dBm), and transmit rate (Mbps), if connected.
+# Signal and speed are extracted using the 'airport' tool and system_profiler.
 #
-wifi_lines=()
+
+# Wi-Fi section: display current SSID, Wi-Fi version, frequency, channel, bandwidth, signal, transmit rate, and security, each on its own line (after SSID/PHY).
 ssid=$(ipconfig getsummary en0 | awk -F ' SSID : ' '/ SSID : / {print $2}')
 if [[ -n "$ssid" ]]; then
   sp_info=$(system_profiler SPAirPortDataType 2>/dev/null)
+  sp_info=$(echo "$sp_info" | awk '/Other Local Wi-Fi Networks:/ {exit} {print}')
+  # Extract Country Code from main block (not Current Network Information)
+  wifi_country_code=$(echo "$sp_info" | awk -F'Country Code: ' '/Country Code: / {print $2; exit}')
+  # Generate flag from country code
+  wifi_country_flag=""
+  if [[ -n "$wifi_country_code" && ${#wifi_country_code} -eq 2 ]]; then
+    upper_code=$(echo "$wifi_country_code" | tr '[:lower:]' '[:upper:]')
+    for ((i=0; i<${#upper_code}; i++)); do
+      c=${upper_code:i:1}
+      ord=$(printf '%d' "'$c")
+      code=$((127397 + ord))
+      wifi_country_flag+=$(perl -CO -e "print chr($code)")
+    done
+  fi
   phy=$(echo "$sp_info" | awk -F': ' '/PHY Mode:/{print $2; exit}')
+  # Map 802.11 PHY modes to Wi-Fi generation labels (including Wi-Fi 8 / 802.11bn)
   case "$phy" in
     "802.11a") wifi_ver="Wi-Fi 1" ;;
     "802.11b") wifi_ver="Wi-Fi 2" ;;
@@ -527,14 +544,104 @@ if [[ -n "$ssid" ]]; then
     "802.11n") wifi_ver="Wi-Fi 4" ;;
     "802.11ac") wifi_ver="Wi-Fi 5" ;;
     "802.11ax") wifi_ver="Wi-Fi 6" ;;
+    "802.11be") wifi_ver="Wi-Fi 7" ;;
+    "802.11bn") wifi_ver="Wi-Fi 8" ;;
     *) wifi_ver="$phy" ;;
   esac
-  wifi_lines+=("$ssid • $wifi_ver ($phy) | refresh=true")
-fi
-if [[ ${#wifi_lines[@]} -gt 0 ]]; then
+  # Extract channel, bandwidth, frequency, signal, transmit rate, security from system_profiler
+  wifi_channel_line=$(echo "$sp_info" | awk -F'Channel: ' '/Channel: / {print $2; exit}')
+  wifi_channel_num=$(echo "$wifi_channel_line" | awk '{print $1}')
+  wifi_bandwidth=$(echo "$wifi_channel_line" | grep -o '[0-9]\+MHz')
+  wifi_channel=$(echo "$wifi_channel_line" | awk '{print $1}')
+  # Frequency label
+  wifi_freq_label_sp=""
+  if [[ -n "$wifi_channel" ]]; then
+    if (( wifi_channel >= 1 && wifi_channel <= 14 )); then
+      wifi_freq_label_sp="2,4 GHz"
+    elif (( wifi_channel >= 36 && wifi_channel <= 165 )); then
+      wifi_freq_label_sp="5 GHz"
+    elif (( wifi_channel > 165 )); then
+      wifi_freq_label_sp="6 GHz"
+    else
+      wifi_freq_label_sp="?"
+    fi
+  fi
+  # Signal (dBm) and transmit rate
+  wifi_signal=$(echo "$sp_info" | awk -F'Signal / Noise: ' '/Signal \/ Noise:/ {print $2; exit}' | awk '{print $1}')
+  wifi_txrate_sp=$(echo "$sp_info" | awk -F'Transmit Rate: ' '/Transmit Rate:/ {print $2; exit}' | grep -Eo '[0-9]+')
+  # Security
+  wifi_security=$(echo "$sp_info" | awk '/Current Network Information:/,0' | awk -F'Security: ' '/Security: / {print $2; exit}')
+
   echo "---"
   echo "${menu_wifi}"
-  printf "%s\n" "${wifi_lines[@]}"
+  # First line: SSID • Wi-Fi X (802.11xx) • Frequency (if present)
+  wifi_line="→ $ssid • $wifi_ver ($phy)"
+  if [[ -n "$wifi_freq_label_sp" ]]; then
+    wifi_line+=" • $wifi_freq_label_sp"
+  fi
+  echo "$wifi_line | refresh=true"
+  # Sub-lines: Channel, Bandwidth, Signal, Transmit rate, Security
+  # Channel and Bandwidth together
+  case "$lang" in
+    fr) channel_label="Canal" ;;
+    *)  channel_label="Channel" ;;
+  esac
+  channel_and_bw="$wifi_channel_num"
+  if [[ -n "$wifi_channel_num" && -n "$wifi_bandwidth" ]]; then
+    channel_and_bw+=" • $wifi_bandwidth"
+  elif [[ -n "$wifi_bandwidth" ]]; then
+    channel_and_bw="$wifi_bandwidth"
+  fi
+  if [[ -n "$wifi_country_flag" ]]; then
+    channel_and_bw+=" $wifi_country_flag"
+  fi
+  if [[ -n "$channel_and_bw" ]]; then
+    printf "%s : %s | refresh=true\n" "$channel_label" "$channel_and_bw"
+  fi
+  # 4. Signal
+  case "$lang" in
+    fr) sig_label="Signal" ;;
+    *)  sig_label="Signal" ;;
+  esac
+  if [[ -n "$wifi_signal" ]]; then
+    printf "%s : %s dBm | refresh=true\n" "$sig_label" "$wifi_signal"
+  fi
+  # 5. Transmit rate (convert to Gbps if >=1000, locale-aware)
+  case "$lang" in
+    fr) rate_label="Débit" ;;
+    *)  rate_label="Transmit rate" ;;
+  esac
+  # Only show transmit rate if strictly greater than zero
+  if [[ -n "$wifi_txrate_sp" && "$wifi_txrate_sp" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    if (( $(awk "BEGIN {print ($wifi_txrate_sp > 0)}") )); then
+      if (( $(awk "BEGIN {print ($wifi_txrate_sp >= 1000)}") )); then
+        val=$(awk "BEGIN {printf \"%.1f\", $wifi_txrate_sp/1000}")
+        if [[ "$lang" == "fr" ]]; then
+          val=$(echo "$val" | sed 's/\./,/')
+          unit="Gbit/s"
+        else
+          unit="Gbps"
+        fi
+        printf "%s : %s %s | refresh=true\n" "$rate_label" "$val" "$unit"
+      else
+        val=$(awk "BEGIN {printf \"%d\", $wifi_txrate_sp}")
+        if [[ "$lang" == "fr" ]]; then
+          unit="Mbit/s"
+        else
+          unit="Mbps"
+        fi
+        printf "%s : %s %s | refresh=true\n" "$rate_label" "$val" "$unit"
+      fi
+    fi
+  fi
+  # 6. Security
+  case "$lang" in
+    fr) sec_label="Sécurité" ;;
+    *)  sec_label="Security" ;;
+  esac
+  if [[ -n "$wifi_security" ]]; then
+    printf "%s : %s | refresh=true\n" "$sec_label" "$wifi_security"
+  fi
 fi
 
 #
