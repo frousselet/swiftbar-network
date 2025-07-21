@@ -397,47 +397,87 @@ fi
 #
 # Fetch DNS resolver (NextDNS) information and format label for display.
 #
+
+# --- start replacement ---
+# Try NextDNS detection first
 resolver_name=""
 resolver_label=""
-resolver_ip=$(curl -sL --max-time 2 https://test.nextdns.io/ | jq -r '.resolver // empty')
-if [[ -n "$resolver_ip" ]]; then
-  resolver_name=$(curl -sL --max-time 2 "https://api.nextdns.io/resolver/${resolver_ip}" | jq -r '.name // empty')
-fi
-# If resolver_name is Cloudflare, get colo and append to label
-if [[ -n "$resolver_name" && "$resolver_name" != "null" ]]; then
-  resolver_flag=""
-  if [[ "$resolver_name" == "Cloudflare" ]]; then
-    # For Cloudflare: fetch the datacenter code and country flag.
-    cf_trace=$(curl -sL --max-time 2 https://1.1.1.1/cdn-cgi/trace)
-    cf_colo=$(echo "$cf_trace" | grep '^colo=' | awk -F= '{print $2}')
-    if [[ -n "$cf_colo" ]]; then
-      cf_iso=$(cf_colo_to_iso "$cf_colo")
+nextdns_test_json=$(curl -sL --max-time 2 https://test.nextdns.io/)
+nextdns_status=$(echo "$nextdns_test_json" | jq -r '.status // empty')
+if [[ "$nextdns_status" == "ok" ]]; then
+  resolver_name="NextDNS"
+  resolver_proto=$(echo "$nextdns_test_json" | jq -r '.protocol // empty')
+  resolver_server=$(echo "$nextdns_test_json" | jq -r '.server // empty')
+  # Extract location code from server (e.g. netbarista-par-1 → PAR)
+  if [[ "$resolver_server" =~ -([a-z]{3})-([0-9]+)$ ]]; then
+    cf_colo="${BASH_REMATCH[1]}"
+    cf_colo_upper=$(echo "$cf_colo" | tr '[:lower:]' '[:upper:]')
+    cf_iso=$(cf_colo_to_iso "$cf_colo_upper")
+    resolver_flag=""
+    if [[ -n "$cf_iso" ]]; then
       for ((i=0; i<${#cf_iso}; i++)); do
         c=${cf_iso:i:1}
         ord=$(printf '%d' "'$c")
         code=$((127397 + ord))
         resolver_flag+=$(perl -CO -e "print chr($code)")
       done
-      resolver_name="${resolver_name} • $cf_colo${resolver_flag:+ $resolver_flag}"
+    fi
+    resolver_display="$resolver_name • $resolver_proto • $resolver_server"
+    if [[ -n "$resolver_flag" ]]; then
+      resolver_display+=" $resolver_flag"
     fi
   else
-    # For other resolvers: fetch country via ifconfig.co and build flag.
-    dns_country_iso=$(curl -sL "https://ifconfig.co/country-iso?ip=$resolver_ip")
-    if [[ ${#dns_country_iso} -eq 2 ]]; then
-      for ((i=0; i<${#dns_country_iso}; i++)); do
-        c=${dns_country_iso:i:1}
-        ord=$(printf '%d' "'$c")
-        code=$((127397 + ord))
-        resolver_flag+=$(perl -CO -e "print chr($code)")
-      done
-      resolver_name="${resolver_name}${resolver_flag:+ $resolver_flag}"
-    fi
+    resolver_display="$resolver_name • $resolver_proto • $resolver_server"
   fi
   case "$lang" in
-    fr) resolver_label="DNS : $resolver_name | refresh=true" ;;
-    *)  resolver_label="DNS: $resolver_name | refresh=true" ;;
+    fr) resolver_label="DNS : $resolver_display | refresh=true" ;;
+    *)  resolver_label="DNS: $resolver_display | refresh=true" ;;
   esac
-  # Insert the resolver label after hostname/search domains
+else
+  # Fallback to old resolver detection (Cloudflare etc)
+  resolver_ip=$(curl -sL --max-time 2 https://test.nextdns.io/ | jq -r '.resolver // empty')
+  if [[ -n "$resolver_ip" ]]; then
+    resolver_name=$(curl -sL --max-time 2 "https://api.nextdns.io/resolver/${resolver_ip}" | jq -r '.name // empty')
+  fi
+  # If resolver_name is Cloudflare, get colo and flag
+  if [[ -n "$resolver_name" && "$resolver_name" != "null" ]]; then
+    resolver_flag=""
+    if [[ "$resolver_name" == "Cloudflare" ]]; then
+      cf_trace=$(curl -sL --max-time 2 https://one.one.one.one/cdn-cgi/trace)
+      cf_colo=$(echo "$cf_trace" | grep '^colo=' | awk -F= '{print $2}')
+      if [[ -n "$cf_colo" ]]; then
+        cf_iso=$(cf_colo_to_iso "$cf_colo")
+        for ((i=0; i<${#cf_iso}; i++)); do
+          c=${cf_iso:i:1}
+          ord=$(printf '%d' "'$c")
+          code=$((127397 + ord))
+          resolver_flag+=$(perl -CO -e "print chr($code)")
+        done
+        resolver_name="${resolver_name} • $cf_colo${resolver_flag:+ $resolver_flag}"
+      fi
+    else
+      # For other resolvers: fetch country via ifconfig.co and build flag.
+      dns_country_iso=$(curl -sL "https://ifconfig.co/country-iso?ip=$resolver_ip")
+      if [[ ${#dns_country_iso} -eq 2 ]]; then
+        for ((i=0; i<${#dns_country_iso}; i++)); do
+          c=${dns_country_iso:i:1}
+          ord=$(printf '%d' "'$c")
+          code=$((127397 + ord))
+          resolver_flag+=$(perl -CO -e "print chr($code)")
+        done
+        resolver_name="${resolver_name}${resolver_flag:+ $resolver_flag}"
+      fi
+    fi
+    case "$lang" in
+      fr) resolver_label="DNS : $resolver_name | refresh=true" ;;
+      *)  resolver_label="DNS: $resolver_name | refresh=true" ;;
+    esac
+  fi
+fi
+# Insert the resolver_label into the network_lines array at the correct position as before.
+# --- end replacement ---
+
+if [[ -n "$resolver_label" ]]; then
   if [[ -n "$sd" ]]; then
     network_lines+=("$resolver_label")
     if [[ ${#network_lines[@]} -ge 2 ]]; then
@@ -818,18 +858,44 @@ if [[ "$ts_online" == "true" ]]; then
       icon=""
       exiticon=""
       offlineicon=""
+      relayicon=""
       opts=""
-      if [[ "$status_txt" == *direct* ]]; then icon="􀄭 "; fi
+      if [[ "$status_txt" == *direct* ]]; then icon=" • 􀄭 "; fi
       if [[ "$status_txt" == *"offers exit node"* ]]; then exiticon="􁏝 "; fi
       if [[ "$status_txt" == *"exit node"* && "$ip" == "$active_exit_ip" ]]; then exiticon="􁏜 "; fi
       if [[ "$status_txt" == *offline* ]]; then offlineicon="􁣡 "; fi
+      if [[ "$status_txt" == *'relay "'* ]]; then relayicon=" • 􀅌 "; fi
       if [[ "$status_txt" != "-" && "$status_txt" != *offline* && "$status_txt" != *idle* ]]; then opts=" | refresh=true"; fi
 
+      # Extract direct/relay info from status_txt for display
+      direct_info=""
+      if [[ "$status_txt" == *'relay "'* ]]; then
+        # Extract relay code from status_txt, e.g., relay "sin"
+        if [[ "$status_txt" =~ relay\ \"([a-zA-Z0-9_-]+)\" ]]; then
+          relay_code="${BASH_REMATCH[1]}"
+          direct_info="$(echo "$relay_code" | tr '[:lower:]' '[:upper:]')"
+        fi
+      elif [[ "$status_txt" == *direct* ]]; then
+        # Match both IPv4 and IPv6 (in brackets) addresses with port
+        # IPv4: direct 1.2.3.4:1234
+        # IPv6: direct [abcd:abcd:...]:1234
+        if [[ "$status_txt" =~ direct[[:space:]]\[([0-9a-fA-F:]+)\]:([0-9]+) ]]; then
+          # IPv6 with brackets
+          direct_ip="${BASH_REMATCH[1]}"
+          direct_port="${BASH_REMATCH[2]}"
+          direct_info="${direct_ip}:${direct_port}"
+        elif [[ "$status_txt" =~ direct[[:space:]]([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):([0-9]+) ]]; then
+          # IPv4
+          direct_ip="${BASH_REMATCH[1]}"
+          direct_port="${BASH_REMATCH[2]}"
+          direct_info="${direct_ip}:${direct_port}"
+        fi
+      fi
       # Peer line (name/IP + icons)
       if [[ "$is_self" == "1" ]]; then
-        peer_display_name="--􀉩 ${offlineicon}${exiticon}${icon}${name} [$ip]$opts | href=https://login.tailscale.com/admin/machines/$ip"
+        peer_display_name="--􀉩 ${offlineicon}${exiticon}${name} • $ip${icon}${relayicon}${direct_info}$opts | href=https://login.tailscale.com/admin/machines/$ip"
       else
-        peer_display_name="--${offlineicon}${exiticon}${icon}${name} [$ip]$opts | href=https://login.tailscale.com/admin/machines/$ip"
+        peer_display_name="--${offlineicon}${exiticon}${name} • $ip${icon}${relayicon}${direct_info}$opts | href=https://login.tailscale.com/admin/machines/$ip"
       fi
       peer_lines=("$peer_display_name")
 
@@ -850,8 +916,20 @@ if [[ "$ts_online" == "true" ]]; then
       # Display last seen date, OS, and tags in a single line below the peer name.
       fused="--"
       [[ -n "$last_seen_fmt" ]] && fused+="􀋭 $last_seen_fmt"
+      # Set the OS icon
+      os_icon="􀪬"
+      os_lower=$(echo "$os" | tr '[:upper:]' '[:lower:]')
+      case "$os_lower" in
+        windows*) os_icon="􀥺" ;;
+        macos*) os_icon="􁈸" ;;
+        ios*) os_icon="􀟜" ;;
+        tvos*) os_icon="􀎲" ;;
+        android*) os_icon="􁤫" ;;
+        linux*) os_icon="􀧘" ;;
+        *) os_icon="􀪬" ;;
+      esac
       os_display=$(echo "$os" | xargs)
-      [[ -n "$os_display" && "$os_display" != "null" ]] && fused+="   􀪬 $os_display"
+      [[ -n "$os_display" && "$os_display" != "null" ]] && fused+="   $os_icon $os_display"
       [[ -n "$tags" && "$tags" != "null" ]] && fused+="   􀋡 $tags"
       # If relay field is present, add relay code and flag to the display line.
       if [[ "$is_self" == "1" ]]; then
