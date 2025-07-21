@@ -566,8 +566,10 @@ if [[ -n "$ssid" ]]; then
       wifi_freq_label_sp="?"
     fi
   fi
-  # Signal (dBm) and transmit rate
-  wifi_signal=$(echo "$sp_info" | awk -F'Signal / Noise: ' '/Signal \/ Noise:/ {print $2; exit}' | awk '{print $1}')
+  # Signal (dBm), Noise (dBm), and transmit rate
+  wifi_signal_noise_line=$(echo "$sp_info" | awk -F'Signal / Noise: ' '/Signal \/ Noise:/ {print $2; exit}')
+  wifi_signal=$(echo "$wifi_signal_noise_line" | awk '{print $1}')
+  wifi_noise=$(echo "$wifi_signal_noise_line" | awk -F'/' '{if (NF > 1) print $2}' | awk '{print $1}')
   wifi_txrate_sp=$(echo "$sp_info" | awk -F'Transmit Rate: ' '/Transmit Rate:/ {print $2; exit}' | grep -Eo '[0-9]+')
   # Security
   wifi_security=$(echo "$sp_info" | awk '/Current Network Information:/,0' | awk -F'Security: ' '/Security: / {print $2; exit}')
@@ -600,11 +602,15 @@ if [[ -n "$ssid" ]]; then
   fi
   # 4. Signal
   case "$lang" in
-    fr) sig_label="Signal" ;;
-    *)  sig_label="Signal" ;;
+    fr) sig_label="Signal" ; noise_label="Bruit" ;;
+    *)  sig_label="Signal" ; noise_label="Noise" ;;
   esac
   if [[ -n "$wifi_signal" ]]; then
     printf "%s : %s dBm | refresh=true\n" "$sig_label" "$wifi_signal"
+  fi
+  # 4b. Noise
+  if [[ -n "$wifi_noise" ]]; then
+    printf "%s : %s dBm | refresh=true\n" "$noise_label" "$wifi_noise"
   fi
   # 5. Transmit rate (convert to Gbps if >=1000, locale-aware)
   case "$lang" in
