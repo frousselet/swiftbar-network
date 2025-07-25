@@ -593,7 +593,7 @@ else
   if [[ -n "$dns_latency" ]]; then
     dns_latency_avg="${dns_latency} ms"
   fi
-  # If resolver_name is Cloudflare, get colo and flag (commented out); for other resolvers, fetch city/country and flag.
+
   if [[ -n "$resolver_name" && "$resolver_name" != "null" ]]; then
     resolver_flag=""
     resolver_info="$resolver_name"
@@ -610,24 +610,28 @@ else
         resolver_flag+=$(perl -CO -e "print chr($code)")
       done
     fi
-    # resolver_info="${resolver_info}"
+
     if [[ -n "$dns_city" ]]; then
       resolver_info="${resolver_info} • $dns_city"
     fi
-    if [[ "$resolver_name" == "Cloudflare" ]]; then
-      cf_trace=$(curl -L -sL --max-time 2 https://one.one.one.one/cdn-cgi/trace)
-      cf_colo=$(echo "$cf_trace" | grep '^colo=' | awk -F= '{print $2}')
-      if [[ -n "$cf_colo" ]]; then
-        resolver_info+=" ${cf_colo}"
-      fi
-    fi
+
     if [[ -n "$resolver_flag" ]]; then
       resolver_info="${resolver_info} $resolver_flag"
     fi
+
+    if [[ "$resolver_name" == "Cloudflare" ]]; then
+      cf_trace=$(curl -sL https://one.one.one.one/cdn-cgi/trace)
+      cf_colo=$(echo "$cf_trace" | grep '^colo=' | awk -F= '{print $2}')
+      if [[ -n "$cf_colo" ]]; then
+        resolver_info+=" • ${cf_colo}"
+      fi
+    fi
   fi
+
   if [[ -n "$dns_latency_avg" ]]; then
     resolver_info+=" • $dns_latency_avg"
   fi
+
   case "$lang" in
     fr) resolver_label="DNS : $resolver_info | refresh=true" ;;
     *)  resolver_label="DNS: $resolver_info | refresh=true" ;;
