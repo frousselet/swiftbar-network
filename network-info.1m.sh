@@ -13,22 +13,18 @@
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 # <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>
 
-##### Section: Language Detection #####
-# Detect the system language for dynamic localization of menu labels and values.
-# This script supports both French and English, adapting all user-facing text accordingly.
-# The AppleLanguages preference returns a language list; we extract the first one and normalize it.
-lang=$(defaults read -g AppleLanguages | awk -F'"' 'NR==2{print $2}' | cut -d'-' -f1)
-
-##### Section: DNS Test Domains #####
-# List of domains to use for DNS latency measurement and DNS resolution tests.
-# These domains are chosen for their high reliability and global presence.
-dns_test_domains=(cloudflare.com google.com microsoft.com amazon.com)
+script_dir="$(cd "$(dirname "$0")" && pwd)"
 
 #
-# Map a DNS resolver name or IP to a set of test IP addresses for latency checks.
-# This function uses pattern matching (including regex and case-insensitive matching)
-# to recognize common public DNS providers and returns a list of their known IP addresses
-# (both IPv4 and IPv6) for use in DNS latency testing.
+# Detect system language for localization of menu labels and values.
+# Support French and English. Extract language from AppleLanguages preference.
+lang=$(defaults read -g AppleLanguages | awk -F'"' 'NR==2{print $2}' | cut -d'-' -f1)
+
+#
+# Define domains for DNS latency measurement and resolution tests.
+dns_test_domains=(cloudflare.com google.com microsoft.com amazon.com)
+
+# Map DNS resolver name or IP to test IP addresses for latency checks.
 resolver_test_ip() {
   case "$1" in
     *[Cc]loudflare*|*1.1.1.1*|*1.0.0.1*)
@@ -61,10 +57,9 @@ resolver_test_ip() {
   esac
 }
 
-##### Section: Menu Label Definitions #####
-# Define all menu labels, section headers, and user-facing strings in both French and English.
-# The correct set is chosen based on the detected system language.
-# This ensures that the plugin is fully localized for the user's environment.
+#
+# Define menu labels, section headers, and user-facing strings in French and English.
+# Select the correct set based on detected system language.
 case "$lang" in
   fr)
     menu_external_ip="IP Publique"
@@ -140,43 +135,47 @@ case "$lang" in
     ;;
 esac
 
-#
-# Map a raw ASN organization or DNS provider name to a short, user-friendly version.
-# This function standardizes display names for known operators, improving readability.
+# Map raw ASN organization or DNS provider name to a user-friendly version.
 map_operator_name() {
   local raw="$1"
   case "$raw" in
-    "123HOST"|"Digital Storage Company Limited")              echo "123HOST" ;;
-    "AdGuard")                                                echo "AdGuard" ;;
-    "AKAMAI-AS")                                              echo "Akamai" ;;
-    "APHP"|"Assistance Publique Hopitaux De Paris")           echo "APHP" ;;
-    "CLOUDFLARENET"|"Cloudflare"|"Cloudflare Inc")              echo "Cloudflare" ;;
-    "Oy Crea Nova Hosting Solution Ltd")                      echo "Creanova" ;;
-    "Datacamp Limited")                                       echo "DataCamp" ;;
-    "Free Mobile SAS")                                        echo "Free Mobile" ;;
-    "Free Pro SAS")                                           echo "Free Pro" ;;
-    "Free SAS")                                               echo "Free" ;;
-    "Google"|"Google DNS"|"Google LLC"|"GOOGLE")              echo "Google" ;;
-    "HostRoyale Technologies Pvt Ltd")                        echo "HostRoyale" ;;
-    "IGUANA-WORLDWIDE"|"Iguane Solutions SAS")                echo "IG1" ;;
-    "Kaopu Cloud HK Limited")                                 echo "Kaopu Cloud" ;;
-    "Keminet SHPK")                                           echo "Keminet" ;;
-    "M247 Europe SRL")                                        echo "M247" ;;
-    "NextDNS"|"NextDNS Inc")                                  echo "NextDNS" ;;
-    "OpenDNS"|"OpenDNS, LLC")                                 echo "OpenDNS" ;;
-    "OVH SAS")                                                echo "OVHcloud" ;;
-    "Private Layer INC")                                      echo "Private Layer" ;;
-    "SFR"|"Societe Francaise Du Radiotelephone - SFR SA")     echo "SFR" ;;
-    "VNPT Corp"|"VIETNAM POSTS AND TELECOMMUNICATIONS GROUP") echo "VNPT" ;;
-    "ZAYO-6461")                                              echo "Zayo" ;;
-    "ZEN-ECN")                                                echo "Zenlayer" ;;
-    *)                                                        echo "$raw" ;;
+    # Common public DNS providers and ISPs
+    "123HOST" \
+      |"Digital Storage Company Limited")               echo "123HOST" ;;
+    "AdGuard")                                          echo "AdGuard" ;;
+    "AKAMAI-AS")                                        echo "Akamai" ;;
+    "APHP" \
+      |"Assistance Publique Hopitaux De Paris")         echo "APHP" ;;
+    "CLOUDFLARENET" \
+      |"Cloudflare" \
+      |"Cloudflare Inc")                                 echo "Cloudflare" ;;
+    "Free Mobile SAS")                                  echo "Free Mobile" ;;
+    "Free Pro SAS")                                     echo "Free Pro" ;;
+    "Free SAS")                                         echo "Free" ;;
+    "Google" \
+      |"Google DNS" \
+      |"Google LLC" \
+      |"GOOGLE")                                        echo "Google" ;;
+    "IGUANA-WORLDWIDE" \
+      |"Iguane Solutions SAS")                          echo "Iguane Solutions" ;;
+    "Kaopu Cloud HK Limited")                           echo "Kaopu Cloud" ;;
+    "NextDNS" \
+      |"NextDNS Inc")                                   echo "NextDNS" ;;
+    "OpenDNS" \
+      |"OpenDNS, LLC")                                  echo "OpenDNS" ;;
+    "OVH SAS")                                          echo "OVHcloud" ;;
+    "SFR" \
+      |"Societe Francaise Du Radiotelephone - SFR SA")  echo "SFR" ;;
+    "VNPT Corp" \
+      |"VIETNAM POSTS AND TELECOMMUNICATIONS GROUP")    echo "VNPT" ;;
+    "ZAYO-6461")                                        echo "Zayo" ;;
+    # Any other raw name that doesn't match the above cases
+    *)                                                   echo "$raw" ;;
   esac
 }
 
-##### Section: Cloudflare Datacenter Mapping #####
-# Map Cloudflare datacenter codes (three-letter codes) to ISO 3166-1 alpha-2 country codes.
-# This is used to display the correct country flag for Cloudflare resolver locations.
+#
+# Map Cloudflare datacenter codes to ISO 3166-1 alpha-2 country codes.
 cf_colo_to_iso() {
   case "$1" in
     AMS) echo "NL" ;;
@@ -209,10 +208,8 @@ cf_colo_to_iso() {
   esac
 }
 
-##### Section: Number Formatting #####
-# Format numbers according to the user's locale for display in the menu.
-# French formatting uses a space as a thousands separator; English uses a comma.
-# This function is used for all statistics and counters.
+#
+# Format numbers according to user's locale for display in the menu.
 format_number() {
   n="$1"
   if [[ "$lang" == "fr" ]]; then
@@ -224,26 +221,21 @@ format_number() {
   fi
 }
 
-##### Section: External IP Information Fetch #####
-# Fetch external IPv4 and IPv6 information from a remote API (ip.rslt.fr).
-# This provides public IP, ASN, city, country, and related metadata.
-# If both IPv4 and IPv6 queries fail, an error is shown and the plugin exits.
+#
+# Fetch external IPv4 and IPv6 information from remote API.
 json4=$(curl -L -4 -s -H "Accept: application/json" http://ip.rslt.fr/json)
 json6=$(curl -L -6 -s -H "Accept: application/json" http://ip.rslt.fr/json)
 if [[ -z "$json4" && -z "$json6" ]]; then
   echo "􁣡"
   echo "---"
-  echo "Erreur: impossible de récupérer les infos IP | refresh=true"
+  echo "Error: unable to retrieve IP information | refresh=true"
   exit 1
 fi
 
-#
 # Prefer IPv4 JSON if available, otherwise fall back to IPv6 JSON.
 json="${json6:-$json4}"
 
-#
-# Parse all relevant fields from the JSON API response.
-# These fields are used for displaying location, ASN, and operator information.
+# Parse relevant fields from JSON API response for display.
 country_iso=$(jq -r '.country_iso' <<<"$json")
 country=$(jq -r '.country // empty' <<<"$json")
 asn_org=$(jq -r '.asn_org' <<<"$json")
@@ -252,20 +244,16 @@ city=$(jq -r '.city // empty' <<<"$json")
 tz=$(jq -r '.time_zone // empty' <<<"$json")
 country_eu=$(jq -r '.country_eu // empty' <<<"$json")
 
-#
-# Parse public IPv4 and IPv6 addresses from the respective JSON responses.
-# For IPv6, remove any interface scope (e.g., %en0) and ensure the result is a valid IPv6 address.
+# Parse public IPv4 and IPv6 addresses from JSON responses.
 pub_ip4=$(jq -r '.ip // empty' <<< "$json4")
 pub_ip6=$(jq -r '.ip // empty' <<< "$json6")
-# Remove any scope suffix from public IPv6
+# Remove scope suffix from public IPv6.
 pub_ip6=${pub_ip6%%\%*}
-# Ignore non-IPv6 results (fallback to IPv4)
+# Ignore non-IPv6 results (fallback to IPv4).
 if [[ -n "$pub_ip6" && "$pub_ip6" != *:* ]]; then pub_ip6=""; fi
 
-#
-# Perform reverse DNS lookups (PTR) for public IPv4 and IPv6 addresses.
-# Join multiple PTR results with a bullet separator for display.
-# This avoids Unicode paste issues in the menu bar.
+# Perform reverse DNS lookups (PTR) for public IPs.
+# Join multiple PTR results with a bullet for display.
 ptrs4=$(dig -x "$pub_ip4" +short | awk 'NF')
 hostname4=""
 for p in $ptrs4; do
@@ -280,22 +268,18 @@ for p in $ptrs6; do
   hostname6+="${p%.}"
 done
 
-##### Section: Local Interface and Address Detection #####
-# Determine the default outbound network interface and fetch the local IPv4 address for that interface.
-# This is used to correlate local and public network information.
+#
+# Determine default outbound network interface and fetch local IPv4 address.
 iface=$(route get default 2>/dev/null | awk '/interface:/ {print $2}')
 local_ip4=$(ipconfig getifaddr "$iface" 2>/dev/null || echo "")
-#
-# Fetch the local IPv6 address on the same interface as the default IPv4.
-# Only global-scope addresses are considered (link-local addresses are excluded).
+# Fetch local IPv6 address on the same interface (global-scope only).
 local_ip6=$(ifconfig "$iface" 2>/dev/null \
   | awk '/inet6 / && !/fe80/ {print $2; exit}' \
   | sed 's/%.*//')
 ip6="$local_ip6"
 
-##### Section: Flag Emoji Construction #####
-# Construct a Unicode flag emoji from the ISO country code.
-# This is done by converting each character to a regional indicator symbol.
+#
+# Construct Unicode flag emoji from ISO country code.
 flag=""
 for ((i=0; i<${#country_iso}; i++)); do
   c=${country_iso:i:1}
@@ -304,9 +288,9 @@ for ((i=0; i<${#country_iso}; i++)); do
   flag+=$(perl -CO -e "print chr($reg)")
 done
 
-##### Section: Network Icon Selection #####
-# Choose the network icon for the menu bar.
-# If Tailscale is installed and an exit node is in use, display a specific icon to indicate that.
+#
+# Choose network icon for the menu bar.
+# If Tailscale exit node is in use, display a specific icon.
 network_icon="􀤆"
 if command -v tailscale &>/dev/null; then
   ts_status_json=$(tailscale status --json 2>/dev/null)
@@ -316,15 +300,22 @@ if command -v tailscale &>/dev/null; then
   fi
 fi
 
-##### Section: ASN Organization Name Mapping #####
-# Map the ASN organization to a short, standardized name for display.
-# This improves menu readability, especially for common providers.
+#
+# Map ASN organization to a short, standardized name for display.
 asn_org_f="$(map_operator_name "$asn_org")"
 
-##### Section: ISP Icon Fetch and Encoding #####
-# Attempt to fetch the ISP's logo/icon from a static CDN.
-# If unavailable, fall back to the domain's favicon as a generic icon.
-# The image is encoded in base64 for inline display in the SwiftBar menu.
+#
+# Detect if a Mullvad exit node is in use.
+mullvad_exit_node_used=""
+mullvad_line=$(tailscale status | grep mullvad.ts.net | head -n1)
+if [[ -n "$mullvad_line" ]]; then
+  # Extract the node name (fqdn)
+  mullvad_exit_node_used=$(echo "$mullvad_line" | awk '{print $2}')
+fi
+
+#
+# Fetch ISP logo/icon from CDN, fallback to favicon if unavailable.
+# Encode image in base64 for inline display in SwiftBar menu.
 org_fmt=$(echo "$asn_org" | tr '[:upper:]' '[:lower:]' | sed 's/ /_/g')
 image_url="https://static.ui.com/isp/${org_fmt}_51x51.png"
 whois_domain=$(whois "$asn" \
@@ -334,8 +325,7 @@ whois_domain=$(whois "$asn" \
   | cut -d@ -f2)
 favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${whois_domain}&size=32"
 
-#
-# Check HTTP status before downloading the ISP icon to avoid displaying broken images.
+# Check HTTP status before downloading ISP icon to avoid broken images.
 status=$(curl -s -o /dev/null -w '%{http_code}' "$image_url")
 if [[ "$status" == "200" ]]; then
   image_enc=$(curl -sSL "$image_url" | base64)
@@ -343,21 +333,25 @@ else
   image_enc=$(curl -sSL "$favicon_url" | base64)
 fi
 
-##### Section: Main Menu Output #####
-# Output the main menu bar icon, ISP/operator name, and ASN information.
+#
+# Output main menu bar icon, ISP/operator name, and ASN info.
 # Add clickable links for ASN lookups, and display city, country (with flag), and time zone.
-# If a logo is available, it is shown as a menu image.
-echo "${network_icon}  ${asn_org_f}"
+# Show logo as menu image if available.
+# If a Mullvad exit node is active, display "Mullvad" instead of asn_org_f.
+if [[ "$exit_node_in_use" == "true" && "$mullvad_exit_node_used" == *.mullvad.ts.net ]]; then
+  echo "${network_icon}  Mullvad"
+else
+  echo "${network_icon}  ${asn_org_f}"
+fi
 echo "---"
-# Only display the image if it is set and is long enough to be a valid image (avoid empty lines when logo is missing)
+# Only display image if set and valid (avoid empty lines when logo is missing).
 if [[ -n "$image_enc" && "${#image_enc}" -gt 100 ]]; then
   echo "| image=${image_enc}"
   echo "---"
 fi
 
-#
 # Show ASN operator name and clickable AS numbers.
-# Handles the case where IPv4 and IPv6 ASN differ (multi-homing).
+# Handle case where IPv4 and IPv6 ASN differ.
 asn4=$(jq -r '.asn // empty' <<<"$json4")
 asn6=$(jq -r '.asn // empty' <<<"$json6")
 if [[ -n "$asn4" && -n "$asn6" ]]; then
@@ -382,9 +376,7 @@ if [[ -n "$country" ]]; then
 fi
 [[ -n "$tz"     ]] && echo "${menu_timezone} : $tz | refresh=true"
 echo
-#
-# If city or country is available, provide a menu entry to open the location in Apple Maps.
-# The query string is URL-encoded and lowercased for best compatibility.
+# If city or country is available, provide menu entry to open location in Apple Maps.
 if [[ -n "$city" || -n "$country" ]]; then
   query=$(printf '%s %s' "$city" "$country" \
     | tr '[:upper:]' '[:lower:]' \
@@ -392,10 +384,10 @@ if [[ -n "$city" || -n "$country" ]]; then
   echo "${menu_open_in_maps} | href=maps://?q=${query} refresh=true"
 fi
 
-##### Section: DNS Server Detection #####
-# Fetch DNS servers used by the default interface, separating IPv4 and IPv6 addresses.
-# Remove any interface scope (e.g., %en0) from DNS entries.
-# If none found for the interface, fall back to all system DNS servers.
+#
+# Fetch DNS servers used by default interface, separate IPv4 and IPv6.
+# Remove interface scope from DNS entries.
+# If none found for interface, fall back to all system DNS servers.
 dns_servers=$(scutil --dns | awk -v iface="$iface" '
   /^resolver / {inres=0}
   /if_index:.*\('"$iface"'\)/ {inres=1}
@@ -416,12 +408,11 @@ for d in "${dns_arr[@]}"; do
     dns4+="${d} • "
   fi
 done
-# Remove trailing delimiter
+# Remove trailing delimiter.
 dns4=${dns4%% • }
 dns6=${dns6%% • }
 
-#
-# Fallback: if no DNS found for the interface, show all DNS servers on the system.
+# Fallback: if no DNS found for interface, show all system DNS servers.
 if [[ -z "$dns4" && -z "$dns6" ]]; then
   dns_servers=$(scutil --dns | awk '/nameserver\[[0-9]+\] :/ {print $3}' | sort -u)
   dns_arr=()
@@ -443,17 +434,15 @@ if [[ -z "$dns4" && -z "$dns6" ]]; then
   dns6=${dns6%% • }
 fi
 
-#
-# Get the default IPv4 and IPv6 gateways for the system, removing any interface scope from IPv6.
+# Get default IPv4 and IPv6 gateways, remove interface scope from IPv6.
 gw4=$(route -n get default 2>/dev/null | awk '/gateway:/ {print $2}')
 gw6=$(route -n get -inet6 default 2>/dev/null | awk '/gateway:/ {print $2}')
 # Remove any scope suffix from IPv6 gateway
 gw6=${gw6%%\%*}
 
 echo "---"
-##### Section: Tailscale Status Detection #####
-# If Tailscale is installed, obtain its status and online state using a single JSON call.
-# This provides information about the current node, peers, and MagicDNS.
+#
+# If Tailscale is installed, obtain status and online state using JSON call.
 if command -v tailscale &>/dev/null; then
   ts_json=$(tailscale status --json --peers 2>/dev/null)
   ts_online=$(echo "$ts_json" | jq -r '.Self.Online // false')
@@ -468,13 +457,10 @@ else
   magicdns_domain=""
 fi
 
-##### Section: General Network Information #####
-# Build a section with general network information, including host name and search domains.
-# Also, fetch and display DNS resolver info (e.g., NextDNS) if available.
-# This section is always shown and provides the primary network context for the machine.
+#
+# Build section with general network information: host name, search domains, DNS resolver info.
 network_lines=()
 [[ -n "$(hostname)" ]] && network_lines+=("${menu_host_name} : $(hostname) | refresh=true")
-#
 # Get search domains in use and display as a single line.
 search_domains=$(scutil --dns | awk -F': ' '/search domain\[[0-9]+\]/ {print $2}' | sort -u)
 sd=$(echo "$search_domains" | tr '\n' ',' | sed 's/,$//; s/,/ • /g')
@@ -482,12 +468,8 @@ if [[ -n "$sd" ]]; then
   network_lines+=("${menu_search_domains} : $sd | refresh=true")
 fi
 
-#
-# Fetch DNS resolver (e.g., NextDNS) information and format label for display.
-# This logic attempts to detect NextDNS first, then falls back to other resolver detection.
-# The DNS latency is measured using ICMP ping and/or DNS query time, with fallback strategies.
-#
-# Try NextDNS detection first (by querying the NextDNS test endpoint).
+# Fetch DNS resolver information and format label for display.
+# Try NextDNS detection first. Measure DNS latency using ICMP ping or DNS query time.
 resolver_name=""
 resolver_label=""
 nextdns_test_json=$(curl -sL https://test.nextdns.io/)
@@ -526,11 +508,9 @@ if [[ "$nextdns_status" == "ok" ]]; then
   fi
 
   dns_latency=""
-  # Try ICMP ping first for lowest-latency measurement.
   if ping -c 2 -W 1 "$resolver_ip" &>/dev/null; then
     dns_latency=$(ping -c 2 -q "$resolver_ip" | awk -F'/' '/^rtt/ {print int($5)}')
   fi
-  # If ping fails, fallback to DNS query latency via resolver_test_ip or system resolver (minimum latency logic).
   if [[ -z "$dns_latency" ]]; then
     dns_latency=""
     min_latency=""
@@ -571,22 +551,13 @@ if [[ "$nextdns_status" == "ok" ]]; then
     resolver_label="${resolver_label%| refresh=true} • $dns_latency_avg | refresh=true"
   fi
 else
-  # Fallback to legacy resolver detection (Cloudflare etc), use ping for latency, fallback to dig if ping fails.
   resolver_ip=$(curl -sL https://test.nextdns.io/ | jq -r '.resolver // empty')
   if [[ -n "$resolver_ip" ]]; then
     dns_info_json=$(curl -sL "https://ip.rslt.fr/json?ip=$resolver_ip")
     resolver_name=$(echo "$dns_info_json" | jq -r '.asn_org // empty')
     resolver_name="$(map_operator_name "$resolver_name")"
-    # Si le nom n’a pas été mappé, tente de récupérer un nom plus lisible via api.nextdns.io
-    if [[ "$resolver_name" == "$(echo "$dns_info_json" | jq -r '.asn_org // empty')" && -n "$resolver_ip" ]]; then
-      api_nextdns_name=$(curl -sL "https://api.nextdns.io/resolver/$resolver_ip" | jq -r '.name // empty')
-      if [[ -n "$api_nextdns_name" && "$api_nextdns_name" != "null" ]]; then
-        resolver_name="$api_nextdns_name"
-      fi
-    fi
   fi
   dns_latency=""
-  # Try ICMP ping first
   dns_latency=""
   min_latency=""
   test_ips=( $(resolver_test_ip "$resolver_name") )
@@ -626,21 +597,7 @@ else
   if [[ -n "$resolver_name" && "$resolver_name" != "null" ]]; then
     resolver_flag=""
     resolver_info="$resolver_name"
-    # if [[ "$resolver_name" == "Cloudflare" ]]; then
-    #   cf_trace=$(curl -L -sL --max-time 2 https://one.one.one.one/cdn-cgi/trace)
-    #   cf_colo=$(echo "$cf_trace" | grep '^colo=' | awk -F= '{print $2}')
-    #   if [[ -n "$cf_colo" ]]; then
-    #     cf_iso=$(cf_colo_to_iso "$cf_colo")
-    #     for ((i=0; i<${#cf_iso}; i++)); do
-    #       c=${cf_iso:i:1}
-    #       ord=$(printf '%d' "'$c")
-    #       code=$((127397 + ord))
-    #       resolver_flag+=$(perl -CO -e "print chr($code)")
-    #     done
-    #     resolver_info+=" • $cf_colo${resolver_flag:+ $resolver_flag}"
-    #   fi
-    # else
-      # For other resolvers: fetch city and country via ip.rslt.fr/json and build flag.
+    # For other resolvers: fetch city and country via ip.rslt.fr/json and build flag.
     dns_info_json=$(curl -sL "https://ip.rslt.fr/json?ip=$resolver_ip")
     dns_country_iso=$(echo "$dns_info_json" | jq -r '.country_iso // empty')
     dns_city=$(echo "$dns_info_json" | jq -r '.city // empty')
@@ -657,6 +614,13 @@ else
     if [[ -n "$dns_city" ]]; then
       resolver_info="${resolver_info} • $dns_city"
     fi
+    if [[ "$resolver_name" == "Cloudflare" ]]; then
+      cf_trace=$(curl -L -sL --max-time 2 https://one.one.one.one/cdn-cgi/trace)
+      cf_colo=$(echo "$cf_trace" | grep '^colo=' | awk -F= '{print $2}')
+      if [[ -n "$cf_colo" ]]; then
+        resolver_info+=" ${cf_colo}"
+      fi
+    fi
     if [[ -n "$resolver_flag" ]]; then
       resolver_info="${resolver_info} $resolver_flag"
     fi
@@ -668,13 +632,9 @@ else
     fr) resolver_label="DNS : $resolver_info | refresh=true" ;;
     *)  resolver_label="DNS: $resolver_info | refresh=true" ;;
   esac
-  # fi (end commented-out Cloudflare-specific logic)
 fi
-#
-# Insert the resolver_label into the network_lines array at the correct position as before.
 
 if [[ -n "$resolver_label" ]]; then
-  # Always append the DNS latency to the resolver_label if not already present
   if [[ -n "$resolver_label" && -n "$dns_latency_avg" && "$resolver_label" != *"$dns_latency_avg"* ]]; then
     resolver_label="${resolver_label%| refresh=true} • $dns_latency_avg | refresh=true"
   fi
@@ -699,9 +659,8 @@ if [[ ${#network_lines[@]} -gt 0 ]]; then
   echo "---"
 fi
 
-##### Section: IPv6 Information Output #####
-# IPv6 section: collect and display all relevant IPv6 addresses, DNS servers, gateways, and hostnames.
-# Also, enumerate all interfaces and their global IPv6 addresses, with role labeling (public, ULA, temporary, etc).
+#
+# IPv6 section: display relevant IPv6 addresses, DNS servers, gateways, hostnames, and global IPv6 addresses per interface.
 ipv6_lines=()
 [[ -n "$pub_ip6" ]] && ipv6_lines+=("${menu_pub_ipv6} : $pub_ip6 | refresh=true")
 for ifc in $(networksetup -listallhardwareports | awk '/Device: / {print $2}' | sort); do
@@ -733,9 +692,8 @@ if [[ ${#ipv6_lines[@]} -gt 0 ]]; then
   echo "---"
 fi
 
-##### Section: IPv4 Information Output #####
-# IPv4 section: collect and display public and local IPv4 addresses, DNS servers, gateways, and hostnames.
-# Enumerate all interfaces and show their IPv4 addresses to provide a full view of all active IPv4 connections.
+#
+# IPv4 section: display public and local IPv4 addresses, DNS servers, gateways, hostnames, and IPv4 addresses per interface.
 ipv4_lines=()
 [[ -n "$pub_ip4" ]] && ipv4_lines+=("${menu_pub_ipv4} : $pub_ip4 | refresh=true")
 for ifc in $(networksetup -listallhardwareports | awk '/Device: / {print $2}' | sort); do
@@ -750,11 +708,9 @@ if [[ ${#ipv4_lines[@]} -gt 0 ]]; then
   printf "%s\n" "${ipv4_lines[@]}"
 fi
 
-##### Section: Wi-Fi Information Output #####
-# Wi-Fi section: display current SSID, Wi-Fi version, frequency, channel, bandwidth, signal strength, transmit rate, and security.
-# Each property is shown on its own line (after SSID/PHY line).
-# Signal and speed are extracted using the 'airport' tool and system_profiler.
-# This section is only shown if a Wi-Fi interface is active and connected.
+#
+# Wi-Fi section: display current SSID, Wi-Fi version, frequency, channel, bandwidth, signal, transmit rate, and security.
+# Only shown if Wi-Fi interface is active and connected.
 ssid=$(ipconfig getsummary en0 | awk -F ' SSID : ' '/ SSID : / {print $2}')
 if [[ -n "$ssid" ]]; then
   sp_info=$(system_profiler SPAirPortDataType 2>/dev/null)
@@ -900,11 +856,9 @@ if [[ -n "$ssid" ]]; then
   fi
 fi
 
-##### Section: Tailscale Peer Information Output #####
-# If Tailscale is online, display Tailscale-specific information, including DERP relay, machine tags, and all Tailscale peers.
-# For each peer, display connection status, OS, tags, last seen, and relay location.
-# Also, show routes and handle online/offline status for each peer.
-# This section provides a detailed view of the Tailscale mesh network and peer connectivity.
+#
+# If Tailscale is online, display Tailscale information: DERP relay, machine tags, and all peers.
+# For each peer, display connection status, OS, tags, last seen, relay location, and routes.
 if [[ "$ts_online" == "true" ]]; then
   # Nearest DERP and its latency: show the nearest relay node and its measured latency.
   nearest_derp=""
@@ -1254,18 +1208,22 @@ if [[ "$ts_online" == "true" ]]; then
     case "$lang" in
       fr)
         exitnodes_label="Exit nodes"
-        exitnodes_priv_label="Privés"
-        exitnodes_mullvad_label="Mullvad"
+        exitnodes_priv_label="Serveurs privés"
+        exitnodes_mullvad_label="Serveurs Mullvad"
+        disconnect_label="→ Déconnecter"
         ;;
       *)
         exitnodes_label="Exit nodes"
-        exitnodes_priv_label="Private"
-        exitnodes_mullvad_label="Mullvad"
+        exitnodes_priv_label="Private servers"
+        exitnodes_mullvad_label="Mullvad servers"
+        disconnect_label="→ Disconnect"
         ;;
     esac
     exitnodes_lines=()
     exitnodes_raw=$(tailscale exit-node list 2>/dev/null | tail -n +2)
     if [[ -n "$exitnodes_raw" ]]; then
+      # Escape only the spaces in script_dir for use in bash=...
+      escaped_script_dir="${script_dir// /\\ }"
       exitnodes_prive=()
       mullvad_raw_lines=()
       while IFS= read -r line; do
@@ -1276,21 +1234,29 @@ if [[ "$ts_online" == "true" ]]; then
         IFS='|' read -r ip host country city status <<<"$line_pipe"
         [[ -z "$host" || "$host" == "HOSTNAME" || "$host" == "To" ]] && continue
 
-        if [[ "$host" =~ \.mullvad\.ts\.net$ ]]; then
-          mullvad_raw_lines+=("$host|$country|$city|$status")
-        else
-          # Priority: selected → 􀒗, then status != - → 􀇾, else 􀨳
-          if [[ "$status" == "selected" ]]; then
-            icon="􀒗"
-          elif [[ "$status" != "-" ]]; then
-            icon="􀇾"
+          if [[ "$host" =~ \.mullvad\.ts\.net$ ]]; then
+            mullvad_raw_lines+=("$host|$country|$city|$status")
           else
-            icon="􀨳"
+            # Priority: selected → 􀒗, then status != - → 􀇾, else 􀨳
+            if [[ "$status" == "selected" ]]; then
+              icon="􀒗"
+            elif [[ "$status" != "-" ]]; then
+              icon="􀇾"
+            else
+              icon="􀨳"
+            fi
+            prefix=$(echo "$host" | awk -F'.' '{print $1}')
+            exitnodes_prive+=("--$icon $prefix | bash=\"/Applications/Tailscale.app/Contents/MacOS/Tailscale\" param1=\"set\" param2=\"--exit-node\" param3=\"$prefix\" terminal=false refresh=true")
           fi
-          exitnodes_prive+=("--$icon $(echo "$host" | awk -F'.' '{print $1}') | refresh=true")
-        fi
       done <<<"$exitnodes_raw"
       exitnodes_lines+=("→ $exitnodes_label")
+      if [[ -n "$exit_node_used" ]]; then
+        exitnodes_lines+=("--Actuel : $exit_node_used")
+      fi
+      if [[ "$exit_node_in_use" == "true" ]]; then
+        exitnodes_lines+=("--$disconnect_label | bash=\"/Applications/Tailscale.app/Contents/MacOS/Tailscale\" param1=\"set\" param2=\"--exit-node=\" terminal=false refresh=true")
+        exitnodes_lines+=("-----")
+      fi
       if [[ ${#exitnodes_prive[@]} -gt 0 ]]; then
         exitnodes_lines+=("--$exitnodes_priv_label")
         exitnodes_lines+=("${exitnodes_prive[@]}")
@@ -1340,16 +1306,16 @@ if [[ "$ts_online" == "true" ]]; then
             else
               auto_label="→ Automatic"
             fi
-            node_line="----$auto_label | refresh=true"
+            node_line="----$auto_label | bash=\"/Applications/Tailscale.app/Contents/MacOS/Tailscale\" param1=\"set\" param2=\"--exit-node\" param3=\"$_host\" terminal=false refresh=true"
             # Place en tête dans la concaténation (Any toujours premier)
             country_nodes[$found_idx]="$node_line"${country_nodes[$found_idx]:+"${country_nodes[$found_idx]}"}
             # Mémorise qu'il faudra séparer plus bas si d'autres villes
             country_nodes[$found_idx]+="__SPLIT__"
           else
             if [[ -n "$city_display" ]]; then
-              node_line="----$icon $node_name • $city_display | refresh=true"
+              node_line="----$icon $node_name • $city_display | bash=\"/Applications/Tailscale.app/Contents/MacOS/Tailscale\" param1=\"set\" param2=\"--exit-node\" param3=\"$_host\" terminal=false refresh=true"
             else
-              node_line="----$icon $node_name | refresh=true"
+              node_line="----$icon $node_name | bash=\"/Applications/Tailscale.app/Contents/MacOS/Tailscale\" param1=\"set\" param2=\"--exit-node\" param3=\"$_host\" terminal=false refresh=true"
             fi
             country_nodes[$found_idx]+="$node_line"$'\n'
           fi
@@ -1412,12 +1378,10 @@ if [[ "$ts_online" == "true" ]]; then
   fi
 fi
 
-##### Section: NextDNS API Analytics Output #####
-# Fetch and display DNS statistics and analytics using the NextDNS API.
-# This includes global and per-device stats, top contacted/blocked domains, GAFAM breakdown, and country breakdown.
-# This section is only shown if the required NextDNS API environment variables are set.
-
 #
+# Fetch and display DNS statistics and analytics using NextDNS API.
+# Includes global stats, top contacted/blocked domains, GAFAM breakdown, and country breakdown.
+
 # Define NextDNS menu labels and icons depending on language.
 case "$lang" in
   fr)
@@ -1434,9 +1398,7 @@ case "$lang" in
     ;;
 esac
 
-#
-# Calculate the relevant time periods for statistics: last hour, today, and this month.
-# These are used to query the NextDNS API for analytics.
+# Calculate time periods for statistics: last hour, today, this month.
 now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 this_hour=$(date -u +%Y-%m-%dT%H:00:00Z)
 last_hour=$(date -u -v -1H +%Y-%m-%dT%H:00:00Z)
@@ -1449,8 +1411,7 @@ periods_to=("$now" "$now" "$now")
 if [[ -n "$NEXTDNS_API_KEY" && -n "$NEXTDNS_PROFILE_ID" ]]; then
   echo "---"
 
-  #
-  # Test the NextDNS connection and show the server and protocol in use.
+# Test NextDNS connection and show server and protocol in use.
   nextdns_test_json=$(curl -L --max-time 2 https://test.nextdns.io/)
   test_status=$(jq -r '.status // empty' <<<"$nextdns_test_json")
   if [[ "$test_status" == "ok" ]]; then
@@ -1461,9 +1422,7 @@ if [[ -n "$NEXTDNS_API_KEY" && -n "$NEXTDNS_PROFILE_ID" ]]; then
     echo "$nextdns_menu • ${NEXTDNS_PROFILE_ID} 􀇾"
   fi
 
-  #
-  # For each period (last hour, today, this month), fetch and display the total and blocked DNS queries.
-  # The % blocked is calculated for each period.
+# For each period, fetch and display total and blocked DNS queries.
   for i in "${!periods_from[@]}"; do
     label="${period_labels[$i]}"
     from="${periods_from[$i]}"
@@ -1479,8 +1438,7 @@ if [[ -n "$NEXTDNS_API_KEY" && -n "$NEXTDNS_PROFILE_ID" ]]; then
     echo "$label $(format_number $total) ${queries_label} • $(format_number $blocked) ${blocked_label} • $pct% | refresh=true"
   done
 
-  #
-  # Add year-to-date statistics.
+# Add year-to-date statistics.
   case "$lang" in
     fr) year_label="􀀄" ;;
     *)  year_label="􀀴" ;;
@@ -1497,7 +1455,7 @@ if [[ -n "$NEXTDNS_API_KEY" && -n "$NEXTDNS_PROFILE_ID" ]]; then
   fi
   echo "$year_label $(format_number $total) ${queries_label} • $(format_number $blocked) ${blocked_label} • $pct% | refresh=true"
 
-  # Display all-time (no time limit) NextDNS statistics.
+# Display all-time NextDNS statistics.
   json_alltime=$(curl -L -s -H "X-Api-Key: $NEXTDNS_API_KEY" \
     "https://api.nextdns.io/profiles/$NEXTDNS_PROFILE_ID/analytics/status")
   total=$(jq '[.data[] | select(.status=="default")][0].queries // 0' <<<"$json_alltime")
@@ -1508,8 +1466,7 @@ if [[ -n "$NEXTDNS_API_KEY" && -n "$NEXTDNS_PROFILE_ID" ]]; then
   fi
   echo "􀵏 $(format_number $total) ${queries_label} • $(format_number $blocked) ${blocked_label} • $pct% | refresh=true"
 
-  #
-  # Show top 20 contacted and blocked domains as submenus for quick review of DNS activity.
+# Show top 20 contacted and blocked domains as submenus.
   if [[ "$lang" == "fr" ]]; then
     domains_label="→ Domaines les plus contactés"
     blocked_domains_label="→ Domaines les plus bloqués"
@@ -1518,8 +1475,7 @@ if [[ -n "$NEXTDNS_API_KEY" && -n "$NEXTDNS_PROFILE_ID" ]]; then
     blocked_domains_label="→ Most blocked domains"
   fi
 
-  # Function to fetch and print a domain list (contacted or blocked).
-  # Handles pagination and limits to 20 domains for menu compactness.
+# Function to fetch and print a domain list (contacted or blocked), limit to 20 domains.
   print_domains() {
     url="$1"
     submenulabel="$2"
@@ -1547,8 +1503,7 @@ if [[ -n "$NEXTDNS_API_KEY" && -n "$NEXTDNS_PROFILE_ID" ]]; then
   print_domains "https://api.nextdns.io/profiles/$NEXTDNS_PROFILE_ID/analytics/domains" "$domains_label"
   print_domains "https://api.nextdns.io/profiles/$NEXTDNS_PROFILE_ID/analytics/domains?status=blocked" "$blocked_domains_label"
 
-  #
-  # GAFAM requests breakdown submenu: show the percentage of queries to major tech companies (Apple, Microsoft, Google, Meta, Amazon).
+# GAFAM requests breakdown submenu: show percentage of queries to major tech companies.
   gafam_json=$(curl -L -s -H "X-Api-Key: $NEXTDNS_API_KEY" "https://api.nextdns.io/profiles/$NEXTDNS_PROFILE_ID/analytics/destinations?type=gafam")
   gafam_total=$(jq '[.data[].queries] | add' <<<"$gafam_json")
   if [[ "$lang" == "fr" ]]; then
@@ -1576,9 +1531,7 @@ if [[ -n "$NEXTDNS_API_KEY" && -n "$NEXTDNS_PROFILE_ID" ]]; then
     done
   fi
 
-  #
-  # Countries breakdown submenu: show percentage of queries by country, with flag and top domains as submenus.
-  # Collect all country data via pagination to ensure accuracy and completeness.
+# Countries breakdown submenu: show percentage of queries by country, with flag and top domains.
   all_countries_json=""
   cursor=""
   while true; do
@@ -1639,65 +1592,7 @@ if [[ -n "$NEXTDNS_API_KEY" && -n "$NEXTDNS_PROFILE_ID" ]]; then
     done <<< "$all_countries_json"
   fi
 
-  # (Commented out) NextDNS Devices breakdown submenu: show top 10 devices by percentage of queries.
-  # This section is commented out for menu brevity, but can be enabled for further device-level analytics.
-  # devices_json=$(curl -s -H "X-Api-Key: $NEXTDNS_API_KEY" "https://api.nextdns.io/profiles/$NEXTDNS_PROFILE_ID/analytics/devices")
-  # # Sort by .queries descending and take top 10
-  # top_devices_arr=$(echo "$devices_json" | jq '[.data[]] | sort_by(-.queries) | .[:10]')
-  # # Calculate the sum of queries for the top 10 devices
-  # devices_top10_total=$(echo "$top_devices_arr" | jq '[.[].queries] | add')
-  # if [[ -n "$top_devices_arr" && "$devices_top10_total" != "0" && "$devices_top10_total" != "" ]]; then
-  #   echo "$nextdns_devices_label"
-  #   echo "$top_devices_arr" | jq -c '.[]' | while IFS= read -r dev; do
-  #     id=$(echo "$dev" | jq -r '.id')
-  #     name=$(echo "$dev" | jq -r '.name // empty')
-  #     queries=$(echo "$dev" | jq -r '.queries')
-  #     model=$(echo "$dev" | jq -r '.model // empty')
-  #     # Use label for unidentified
-  #     if [[ "$id" == "__UNIDENTIFIED__" || -z "$name" || "$name" == "null" ]]; then
-  #       name="$unidentified_device_label"
-  #     fi
-  #     # Calculate percentage of queries for this device out of the top 10
-  #     pct=$(awk "BEGIN {printf \"%.1f\", 100*$queries/$devices_top10_total}")
-  #     if [[ "$pct" == "0.0" ]]; then
-  #       echo "--$name • < 0.1% | refresh=true"
-  #     else
-  #       echo "--$name • $pct% | refresh=true"
-  #     fi
-  #     if [[ -n "$model" && "$model" != "null" ]]; then
-  #       echo "----$model | refresh=true"
-  #     fi
-  #   done
-  # fi
-
-  # (Commented out) NextDNS Protocols breakdown (top 10 protocols by percentage)
-  # This section is commented out for menu brevity, but can be enabled for further protocol-level analytics.
-  # protocols_json=$(curl -s -H "X-Api-Key: $NEXTDNS_API_KEY" "https://api.nextdns.io/profiles/$NEXTDNS_PROFILE_ID/analytics/protocols")
-  # top_protocols_arr=$(echo "$protocols_json" | jq '[.data[]] | sort_by(-.queries) | .[:10]')
-  # # Calculate the sum of queries for the top 10 protocols
-  # protocols_top10_total=$(echo "$top_protocols_arr" | jq '[.[].queries] | add')
-  # if [[ "$lang" == "fr" ]]; then
-  #   protocols_label="→ Protocoles"
-  # else
-  #   protocols_label="→ Protocols"
-  # fi
-  # if [[ -n "$top_protocols_arr" && "$protocols_top10_total" != "0" && "$protocols_top10_total" != "" ]]; then
-  #   echo "$protocols_label"
-  #   echo "$top_protocols_arr" | jq -c '.[]' | while IFS= read -r proto; do
-  #     proto_name=$(echo "$proto" | jq -r '.protocol')
-  #     queries=$(echo "$proto" | jq -r '.queries')
-  #     # Calculate percentage of queries for this protocol out of the top 10
-  #     pct=$(awk "BEGIN {printf \"%.1f\", 100*$queries/$protocols_top10_total}")
-  #     if [[ "$pct" == "0.0" ]]; then
-  #       echo "--$proto_name • < 0.1% | refresh=true"
-  #     else
-  #       echo "--$proto_name • $pct% | refresh=true"
-  #     fi
-  #   done
-  # fi
-
-  # NextDNS Query Types breakdown (top 10 query types by percentage)
-  # This section shows the top DNS query types (A, AAAA, PTR, etc) by share.
+# NextDNS Query Types breakdown (top 10 query types by percentage).
   querytypes_json=$(curl -L -s -H "X-Api-Key: $NEXTDNS_API_KEY" "https://api.nextdns.io/profiles/$NEXTDNS_PROFILE_ID/analytics/queryTypes")
   top_querytypes_arr=$(echo "$querytypes_json" | jq '[.data[]] | sort_by(-.queries) | .[:10]')
   # Calculate the sum of queries for the top 10 query types
