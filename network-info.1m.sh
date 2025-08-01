@@ -338,11 +338,15 @@ fi
 # Add clickable links for ASN lookups, and display city, country (with flag), and time zone.
 # Show logo as menu image if available.
 # If a Mullvad exit node is active, display "Mullvad" instead of asn_org_f.
-if [[ "$exit_node_in_use" == "true" && "$mullvad_exit_node_used" == *.mullvad.ts.net ]]; then
-  echo "${network_icon}  Mullvad"
+if [[ "$exit_node_in_use" == "true" ]]; then
+  if [[ "$mullvad_exit_node_used" == *.mullvad.ts.net ]]; then
+    asn_org_f="Mullvad"
+  fi
+  echo "${network_icon}  ${asn_org_f} ${flag}"
 else
   echo "${network_icon}  ${asn_org_f}"
 fi
+
 echo "---"
 # Only display image if set and valid (avoid empty lines when logo is missing).
 if [[ -n "$image_enc" && "${#image_enc}" -gt 100 ]]; then
@@ -468,6 +472,7 @@ if [[ -n "$sd" ]]; then
   network_lines+=("${menu_search_domains} : $sd | refresh=true")
 fi
 
+#
 # Fetch DNS resolver information and format label for display.
 # Try NextDNS detection first. Measure DNS latency using ICMP ping or DNS query time.
 resolver_name=""
@@ -541,6 +546,12 @@ if [[ "$nextdns_status" == "ok" ]]; then
   dns_latency_avg=""
   if [[ -n "$dns_latency" ]]; then
     dns_latency_avg="${dns_latency} ms"
+  fi
+  # --- PTR lookup for resolver_ip ---
+  resolver_ptr=$(dig -x "$resolver_ip" +short | awk 'NF' | head -n1 | sed 's/\.$//')
+  # Append PTR if not empty and not already present
+  if [[ -n "$resolver_ptr" && "$resolver_display" != *"$resolver_ptr"* ]]; then
+    resolver_display+=" • $resolver_ptr"
   fi
   case "$lang" in
     fr) resolver_label="DNS : $resolver_display | refresh=true" ;;
@@ -625,6 +636,11 @@ else
       if [[ -n "$cf_colo" ]]; then
         resolver_info+=" • ${cf_colo}"
       fi
+    fi
+    # --- PTR lookup for resolver_ip ---
+    resolver_ptr=$(dig -x "$resolver_ip" +short | awk 'NF' | head -n1 | sed 's/\.$//')
+    if [[ -n "$resolver_ptr" && "$resolver_info" != *"$resolver_ptr"* ]]; then
+      resolver_info+=" • $resolver_ptr"
     fi
   fi
 
@@ -715,7 +731,7 @@ fi
 #
 # Wi-Fi section: display current SSID, Wi-Fi version, frequency, channel, bandwidth, signal, transmit rate, and security.
 # Only shown if Wi-Fi interface is active and connected.
-ssid=$(ipconfig getsummary en0 | awk -F ' SSID : ' '/ SSID : / {print $2}')
+ssid=$(system_profiler SPAirPortDataType | awk '/Current Network Information:/ {getline; gsub(/^ +|:$/,""); print; exit}')
 if [[ -n "$ssid" ]]; then
   sp_info=$(system_profiler SPAirPortDataType 2>/dev/null)
   sp_info=$(echo "$sp_info" | awk '/Other Local Wi-Fi Networks:/ {exit} {print}')
@@ -926,7 +942,7 @@ if [[ "$ts_online" == "true" ]]; then
     case "$1" in
       PAR) echo "FR";;
       AMS) echo "NL";;
-      FRA) echo "DE";;
+      FRA|NUE) echo "DE";;
       LHR) echo "GB";;
       NRT) echo "JP";;
       SIN) echo "SG";;
@@ -936,6 +952,7 @@ if [[ "$ts_online" == "true" ]]; then
       YVR|YYZ) echo "CA";;
       BRL) echo "BR";;
       DUB) echo "IE";;
+      WAW) echo "PL";;
       *) echo "$1";;
     esac
   }
@@ -1041,7 +1058,7 @@ if [[ "$ts_online" == "true" ]]; then
       opts=""
       if [[ "$status_txt" == *direct* ]]; then icon="   􀄭 "; fi
       if [[ "$status_txt" == *"offers exit node"* ]]; then exiticon="􁏝 "; fi
-      if [[ "$status_txt" == *"exit node"* && "$ip" == "$active_exit_ip" ]]; then exiticon="􁏜 "; fi
+      if [[ "$status_txt" == *"exit node"* && "$ip" == "$active_exit_ip" ]]; then exiticon="􀐳 "; fi
       if [[ "$status_txt" == *offline* ]]; then offlineicon="􁣡 "; fi
       if [[ "$status_txt" == *'relay "'* ]]; then relayicon="   􀅌 "; fi
       if [[ "$status_txt" != "-" && "$status_txt" != *offline* && "$status_txt" != *idle* ]]; then opts=" | refresh=true"; fi
