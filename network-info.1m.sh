@@ -38,6 +38,7 @@ SPCACHE=""     # system_profiler cache
 TSCACHE_JSON=""  # tailscale status --json --peers cache
 TSCACHE_NETCHECK=""  # tailscale netcheck cache
 NEXTDNS_TEST_JSON="" # https://test.nextdns.io/ cache
+CF_LOC_JSON=""   # https://speed.cloudflare.com/locations cache
 
 # Preload system_profiler just once (it can be slow). Limit runtime.
 if command -v system_profiler >/dev/null 2>&1; then
@@ -61,6 +62,26 @@ fi
 # Cache NextDNS test once (used in two sections further down).
 if command -v curl >/dev/null 2>&1; then
   NEXTDNS_TEST_JSON=$(curl -L --max-time 2 -s https://test.nextdns.io/)
+fi
+# Cache Cloudflare locations once (IATA -> ISO country code mapping) for up to 7 days.
+if command -v curl >/dev/null 2>&1; then
+  CF_LOC_CACHE_FILE="${TMPDIR:-/tmp}/cf_locations_cache.json"
+  CF_LOC_MAX_AGE=$((7 * 24 * 3600)) # 7 days in seconds
+  if [[ -f "$CF_LOC_CACHE_FILE" ]]; then
+    now_ts=$(date +%s)
+    file_ts=$(date +%s -r "$CF_LOC_CACHE_FILE" 2>/dev/null || stat -f %m "$CF_LOC_CACHE_FILE" 2>/dev/null)
+    age=$((now_ts - file_ts))
+    if (( age < CF_LOC_MAX_AGE )); then
+      CF_LOC_JSON=$(cat "$CF_LOC_CACHE_FILE")
+    fi
+  fi
+  # If cache is missing or expired, refresh it.
+  if [[ -z "$CF_LOC_JSON" ]]; then
+    CF_LOC_JSON=$(curl -L --max-time 3 -s https://speed.cloudflare.com/locations)
+    if [[ -n "$CF_LOC_JSON" ]]; then
+      echo "$CF_LOC_JSON" > "$CF_LOC_CACHE_FILE"
+    fi
+  fi
 fi
 # --- end helpers & caches -----------------------------------------------------
 
@@ -217,38 +238,25 @@ map_operator_name() {
 }
 
 #
-# Map Cloudflare datacenter codes to ISO 3166-1 alpha-2 country codes.
+# Map Cloudflare datacenter codes to ISO 3166-1 alpha-2 country codes using dynamic JSON lookup.
 cf_colo_to_iso() {
-  case "$1" in
-    AMS) echo "NL" ;;
-    ARN) echo "SE" ;;
-    ATL) echo "US" ;;
-    BKK) echo "TH" ;;
-    CDG) echo "FR" ;;
-    CPH) echo "DK" ;;
-    DFW) echo "US" ;;
-    FRA) echo "DE" ;;
-    GIG) echo "BR" ;;
-    GRU) echo "BR" ;;
-    HKG) echo "HK" ;;
-    IAD) echo "US" ;;
-    JNB) echo "ZA" ;;
-    LAX) echo "US" ;;
-    LHR) echo "GB" ;;
-    MAD) echo "ES" ;;
-    MIA) echo "US" ;;
-    NRT) echo "JP" ;;
-    ORD) echo "US" ;;
-    PHX) echo "US" ;;
-    SEA) echo "US" ;;
-    SIN) echo "SG" ;;
-    SJC) echo "US" ;;
-    SYD) echo "AU" ;;
-    VIE) echo "AT" ;;
-    YUL) echo "CA" ;;
-    YYZ) echo "CA" ;;
-    *) echo "" ;;
-  esac
+  # Map Cloudflare colo IATA code to ISO 3166-1 alpha-2 using Cloudflare's public locations feed.
+  # Usage: cf_colo_to_iso "CDG" -> "FR". Returns empty string on failure.
+  local code="$1"
+  [[ -z "$code" ]] && { echo ""; return; }
+  # Normalize to uppercase
+  code=$(echo "$code" | tr '[:lower:]' '[:upper:]')
+  # Prefer cached JSON; jq is already a dependency of this script.
+  if [[ -n "$CF_LOC_JSON" ]]; then
+    local iso
+    iso=$(echo "$CF_LOC_JSON" | jq -r --arg code "$code" '.[] | select(.iata == $code) | .cca2 // empty' 2>/dev/null | head -n1)
+    if [[ -n "$iso" && "$iso" != "null" ]]; then
+      echo "$iso"
+      return
+    fi
+  fi
+  # Fallback: empty if not found or cache unavailable.
+  echo ""
 }
 
 #
@@ -317,15 +325,36 @@ if [[ -n "$pub_ip6" && "$pub_ip6" != *:* ]]; then pub_ip6=""; fi
 ptrs4=$(dig -x "$pub_ip4" +short | awk 'NF')
 hostname4=""
 for p in $ptrs4; do
+  h="${p%.}"
+  # Skip non-standard PTRs (octal escapes like \032, invalid chars, bad labels)
+  if [[ "$h" == *\\* ]]; then continue; fi
+  if ! [[ "$h" =~ ^[A-Za-z0-9.-]+$ ]]; then continue; fi
+  valid=1
+  IFS='.' read -ra labels <<< "$h"
+  for lbl in "${labels[@]}"; do
+    if [[ -z "$lbl" || ${#lbl} -gt 63 ]]; then valid=0; break; fi
+    if ! [[ "$lbl" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then valid=0; break; fi
+  done
+  (( valid )) || continue
   [[ -n "$hostname4" ]] && hostname4+=" • "
-  hostname4+="${p%.}"
+  hostname4+="$h"
 done
 
 ptrs6=$(dig -x "$pub_ip6" +short | awk 'NF')
 hostname6=""
 for p in $ptrs6; do
+  h="${p%.}"
+  if [[ "$h" == *\\* ]]; then continue; fi
+  if ! [[ "$h" =~ ^[A-Za-z0-9.-]+$ ]]; then continue; fi
+  valid=1
+  IFS='.' read -ra labels <<< "$h"
+  for lbl in "${labels[@]}"; do
+    if [[ -z "$lbl" || ${#lbl} -gt 63 ]]; then valid=0; break; fi
+    if ! [[ "$lbl" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then valid=0; break; fi
+  done
+  (( valid )) || continue
   [[ -n "$hostname6" ]] && hostname6+=" • "
-  hostname6+="${p%.}"
+  hostname6+="$h"
 done
 
 #
@@ -621,7 +650,11 @@ if [[ "$nextdns_status" == "ok" ]]; then
     dns_latency_avg="${dns_latency} ms"
   fi
   # --- PTR lookup for resolver_ip ---
-  resolver_ptr=$(dig -x "$resolver_ip" +short | awk 'NF' | head -n1 | sed 's/\.$//')
+  resolver_ptr=$(dig -x "$resolver_ip" +short | awk 'NF' \
+    | sed 's/\.$//' \
+    | awk '!/\\/' \
+    | awk '/^[A-Za-z0-9.-]+$/' \
+    | head -n1)
   # Append PTR if not empty and not already present
   if [[ -n "$resolver_ptr" && "$resolver_display" != *"$resolver_ptr"* ]]; then
     resolver_display+=" • $resolver_ptr"
@@ -703,7 +736,11 @@ else
       fi
     fi
     # --- PTR lookup for resolver_ip ---
-    resolver_ptr=$(dig -x "$resolver_ip" +short | awk 'NF' | head -n1 | sed 's/\.$//')
+    resolver_ptr=$(dig -x "$resolver_ip" +short | awk 'NF' \
+      | sed 's/\.$//' \
+      | awk '!/\\/' \
+      | awk '/^[A-Za-z0-9.-]+$/' \
+      | head -n1)
     if [[ -n "$resolver_ptr" && "$resolver_info" != *"$resolver_ptr"* ]]; then
       resolver_info+=" • $resolver_ptr"
     fi
@@ -941,12 +978,10 @@ if [[ "$ts_online" == "true" ]]; then
   if command -v tailscale &>/dev/null; then
     nearest_derp=$(echo "$TSCACHE_NETCHECK" | awk -F': ' '/Nearest DERP:/ {print $2}' | xargs)
     if [[ -n "$nearest_derp" ]]; then
-      derp_latency=$(echo "$TSCACHE_NETCHECK" | awk -v city="$nearest_derp" '
-        $0 ~ "- " && $0 ~ city {
-          match($0, /: *([0-9.]+)ms/, a)
-          if (a[1] != "") print a[1]
-        }
-      ')
+      derp_latency=$(echo "$TSCACHE_NETCHECK" \
+        | awk -v city="$nearest_derp" '$0 ~ "- " && $0 ~ city {print}' \
+        | sed -nE 's/.*: *([0-9.]+)ms.*/\1/p' \
+        | head -n1)
     fi
   fi
 
