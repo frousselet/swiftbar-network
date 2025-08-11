@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 
 # <xbar.title>Network info</xbar.title>
@@ -17,6 +16,7 @@
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 
 # --- helpers & caches ---------------------------------------------------------
+
 # Build a flag emoji from a 2-letter ISO country code (e.g., FR → 🇫🇷).
 flag_from_iso() {
   local iso="$1"
@@ -30,6 +30,167 @@ flag_from_iso() {
     out+=$(perl -CO -e "print chr($code)")
   done
   echo "$out"
+}
+
+# Simple helpers to validate IP formats
+is_ipv4() {
+  local ip="$1"
+  [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+}
+is_ipv6() {
+  local ip="$1"
+  [[ "$ip" == *:* ]]
+}
+
+#
+# Cache directory for JSON and other files.
+CACHEDIR="${HOME}/.cache/swiftbar-network-info"
+mkdir -p "$CACHEDIR"
+
+
+# ensure_icon_size: center-crop to square and resize to NxN (best-effort)
+ensure_icon_size() {
+  local f="$1" size="${2:-16}" tmp="${f}.tmp"
+  [[ ! -s "$f" ]] && return 1
+  if command -v magick >/dev/null 2>&1; then
+    magick "$f" -alpha on -background none \
+      -thumbnail ${size}x${size}^ -gravity center -extent ${size}x${size} \
+      -unsharp 1x1+1.2+0.02 -strip "$tmp" >/dev/null 2>&1 && mv "$tmp" "$f" && return 0
+  elif command -v convert >/dev/null 2>&1; then
+    convert "$f" -alpha on -background none \
+      -thumbnail ${size}x${size}^ -gravity center -extent ${size}x${size} \
+      -unsharp 1x1+1.2+0.02 -strip "$tmp" >/dev/null 2>&1 && mv "$tmp" "$f" && return 0
+  elif command -v sips >/dev/null 2>&1; then
+    sips -z "$size" "$size" "$f" >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
+#
+# cache_url: unified caching for json|image|binary
+# Usage:
+#   cache_url json   "<url>" <ttl> [ext]            [ignored] [follow]
+#   cache_url image  "<url>" <ttl> [ext] [size]      [follow]
+#   cache_url binary "<url>" <ttl> [ext]             [ignored] [follow]
+#   follow: "nofollow" or "0" to disable -L; anything else (or empty) follows redirects.
+# Returns:
+#   json  -> prints JSON content to stdout
+#   image -> prints cached file path
+#   binary-> prints cached file path
+cache_url() {
+  local kind="$1" url="$2" ttl="$3" ext="$4" size="$5" follow="$6"
+  local hash cache_file now_ts file_ts age tmp CURLFOLLOW
+  [[ -z "$kind" || -z "$url" || -z "$ttl" ]] && { echo ""; return 0; }
+  # Redirect policy
+  if [[ "$follow" == "0" || "$follow" == "nofollow" || "$follow" == "false" ]]; then
+    CURLFOLLOW=""
+  else
+    CURLFOLLOW="-L"
+  fi
+  # Normalize kind
+  case "$kind" in
+    json|JSON) kind="json" ;;
+    image|img|IMAGE) kind="image" ;;
+    bin|binary|BIN|BINARY) kind="binary" ;;
+    *) kind="binary" ;;
+  esac
+  # Derive extension if needed
+  if [[ "$kind" == "json" ]]; then
+    ext="json"
+  else
+    if [[ -z "$ext" ]]; then
+      # Always store images as PNG to guarantee SwiftBar compatibility
+      ext="png"
+    fi
+  fi
+  # Build cache file name from SHA-256 of the URL
+  hash=$(echo -n "$url" | shasum -a 256 | awk '{print $1}')
+  cache_file="${CACHEDIR}/${hash}.${ext}"
+  # If kind=image and a cache file exists but it is not an image (e.g., HTML), delete it
+  if [[ "$kind" == "image" && -s "$cache_file" ]]; then
+    if command -v file >/dev/null 2>&1; then
+      mime_cached=$(file -b --mime-type "$cache_file")
+      if [[ "$mime_cached" != image/* ]]; then
+        rm -f "$cache_file" 2>/dev/null
+      fi
+    fi
+  fi
+  # If cache exists and is fresh, return
+  if [[ -s "$cache_file" ]]; then
+    now_ts=$(date +%s)
+    file_ts=$(date +%s -r "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null)
+    age=$((now_ts - file_ts))
+    if (( age < ttl )); then
+      if [[ "$kind" == "json" ]]; then
+        cat "$cache_file"
+      else
+        echo "$cache_file"
+      fi
+      return 0
+    fi
+  fi
+  # Fetch to temp, then commit if non-empty
+  tmp="${cache_file}.tmp.$$"
+  if [[ "$kind" == "json" ]]; then
+    local json
+    json=$(curl --max-time 3 -s $CURLFOLLOW "$url")
+    # Do not cache HTML as JSON (avoid caching error pages)
+    if [[ -n "$json" && "$json" == [{\[]* ]]; then
+      echo "$json" > "$cache_file"
+      echo "$json"
+      return 0
+    fi
+    [[ -s "$cache_file" ]] && cat "$cache_file" || echo ""
+    return 0
+  else
+    # Download while capturing HTTP status and content type
+    meta=$(curl -sS $CURLFOLLOW --max-time 4 -w '%{http_code}|||%{content_type}' -o "$tmp" "$url")
+    http_code="${meta%%|||*}"
+    content_type="${meta#*|||}"
+
+    if [[ -s "$tmp" ]]; then
+      if [[ "$kind" == "image" ]]; then
+        # Require a 200 status and an image/* content type to accept the file
+        if [[ "$http_code" != "200" || "$content_type" != image/* ]]; then
+          rm -f "$tmp" 2>/dev/null
+          # Return existing cache if any; otherwise empty to allow caller fallback (e.g., favicon)
+          [[ -s "$cache_file" ]] && echo "$cache_file" || echo ""
+          return 0
+        fi
+        # Ensure final cached file is PNG regardless of source format
+        local cache_png="${CACHEDIR}/${hash}.png"
+        if command -v magick >/dev/null 2>&1; then
+          magick "$tmp" -alpha on -background none -strip "$cache_png" >/dev/null 2>&1 || cp "$tmp" "$cache_png"
+        elif command -v convert >/dev/null 2>&1; then
+          convert "$tmp" -alpha on -background none -strip "$cache_png" >/dev/null 2>&1 || cp "$tmp" "$cache_png"
+        elif command -v sips >/dev/null 2>&1; then
+          sips -s format png "$tmp" --out "$cache_png" >/dev/null 2>&1 || cp "$tmp" "$cache_png"
+        else
+          # No converter available; if the file is already PNG, just move it; otherwise leave as-is but rename
+          if command -v file >/dev/null 2>&1 && [[ "$(file -b --mime-type "$tmp")" == "image/png" ]]; then
+            mv "$tmp" "$cache_png"
+          else
+            mv "$tmp" "$cache_png"
+          fi
+        fi
+        rm -f "$tmp" 2>/dev/null
+        cache_file="$cache_png"
+        if [[ -n "$size" ]]; then
+          ensure_icon_size "$cache_file" "$size" >/dev/null 2>&1 || true
+        fi
+        echo "$cache_file"
+        return 0
+      else
+        # Binary path: no content-type restriction
+        mv "$tmp" "$cache_file"
+        echo "$cache_file"
+        return 0
+      fi
+    fi
+    rm -f "$tmp" 2>/dev/null
+    [[ -s "$cache_file" ]] && echo "$cache_file" || echo ""
+    return 0
+  fi
 }
 
 # Centralize a few expensive calls so we can reuse their results later.
@@ -63,26 +224,13 @@ fi
 if command -v curl >/dev/null 2>&1; then
   NEXTDNS_TEST_JSON=$(curl -L --max-time 2 -s https://test.nextdns.io/)
 fi
-# Cache Cloudflare locations once (IATA -> ISO country code mapping) for up to 7 days.
+# Cache Cloudflare locations (IATA -> ISO country code mapping) for up to 7 days using cache_url.
 if command -v curl >/dev/null 2>&1; then
-  CF_LOC_CACHE_FILE="${TMPDIR:-/tmp}/cf_locations_cache.json"
-  CF_LOC_MAX_AGE=$((7 * 24 * 3600)) # 7 days in seconds
-  if [[ -f "$CF_LOC_CACHE_FILE" ]]; then
-    now_ts=$(date +%s)
-    file_ts=$(date +%s -r "$CF_LOC_CACHE_FILE" 2>/dev/null || stat -f %m "$CF_LOC_CACHE_FILE" 2>/dev/null)
-    age=$((now_ts - file_ts))
-    if (( age < CF_LOC_MAX_AGE )); then
-      CF_LOC_JSON=$(cat "$CF_LOC_CACHE_FILE")
-    fi
-  fi
-  # If cache is missing or expired, refresh it.
-  if [[ -z "$CF_LOC_JSON" ]]; then
-    CF_LOC_JSON=$(curl -L --max-time 3 -s https://speed.cloudflare.com/locations)
-    if [[ -n "$CF_LOC_JSON" ]]; then
-      echo "$CF_LOC_JSON" > "$CF_LOC_CACHE_FILE"
-    fi
-  fi
+  CF_LOC_MAX_AGE=$((7 * 24 * 3600)) # 7 days
+  CF_LOC_JSON=$(cache_url json "https://speed.cloudflare.com/locations" "$CF_LOC_MAX_AGE")
 fi
+# TTL for ip.rslt.fr/json?ip=... lookups (cache for 24h)
+IP_JSON_TTL=$((24 * 3600))  # 24h cache for ip.rslt.fr/json?ip=...
 # --- end helpers & caches -----------------------------------------------------
 
 #
@@ -138,6 +286,7 @@ case "$lang" in
     menu_timezone="Fuseau horaire"
     menu_open_in_maps="→ Ouvrir dans Apple Plans 􀙊"
     menu_network="Réseau"
+    menu_dns_provider="Fournisseur DNS"
     menu_ipv4="IPv4"
     menu_ipv6="IPv6"
     menu_local_ipv4="IPv4 (Locale)"
@@ -174,6 +323,7 @@ case "$lang" in
     menu_timezone="Time zone"
     menu_open_in_maps="→ Open in Apple Maps 􀙊"
     menu_network="Network"
+    menu_dns_provider="DNS provider"
     menu_ipv4="IPv4"
     menu_ipv6="IPv6"
     menu_local_ipv4="IPv4 (Local)"
@@ -205,36 +355,72 @@ case "$lang" in
     ;;
 esac
 
+# operator_info_map: return canonical operator name AND canonical domain from a raw org/provider string.
+# Output format: "<canon>|<domain>" where <domain> can be empty if unknown.
+operator_info_map() {
+  local raw="$1"
+  case "$raw" in
+    "AKAMAI-AS")                                        echo "Akamai|akamai.com" ;;
+    "Assistance Publique Hopitaux De Paris")            echo "AP-HP|aphp.fr" ;;
+    "CLOUDFLARENET"|"Cloudflare Inc")                    echo "Cloudflare|cloudflare.com" ;;
+    "BOUYGTEL-ISP"|"Bouygues Telecom SA")               echo "Bouygues Telecom|bouyguestelecom.fr" ;;
+    "CISCO-UMBRELLA")                                   echo "Cisco Umbrella|opendns.com" ;;
+    "OpenDNS, LLC")                                     echo "OpenDNS|opendns.com" ;;
+    "Free Mobile SAS")                                  echo "Free Mobile|free.fr" ;;
+    "Free Pro SAS")                                     echo "Free Pro|free.fr" ;;
+    "Free SAS")                                         echo "Free|free.fr" ;;
+    "Google DNS"|"Google LLC"|"GOOGLE")                 echo "Google|google.com" ;;
+    "IGUANA-WORLDWIDE"|"Iguane Solutions SAS")          echo "Iguane Solutions|iguanesolutions.com" ;;
+    "OVH SAS")                                          echo "OVHcloud|ovhcloud.com" ;;
+    "Societe Francaise Du Radiotelephone - SFR SA")     echo "SFR|sfr.fr" ;;
+    "VNPT Corp"|"VIETNAM POSTS AND TELECOMMUNICATIONS GROUP") echo "VNPT|vnpt.vn" ;;
+    "ZAYO-6461")                                        echo "Zayo|zayo.com" ;;
+    "NextDNS")                                          echo "NextDNS|nextdns.io" ;;
+    "AdGuard"|"Adguard")                                echo "AdGuard|adguard.com" ;;
+    "Quad9"|"QUAD9")                                    echo "Quad9|quad9.net" ;;
+    *)                                                   echo "${raw}|" ;;
+  esac
+}
+
 # Map raw ASN organization or DNS provider name to a user-friendly version.
 map_operator_name() {
   local raw="$1"
-  case "$raw" in
-    # Common public DNS providers and ISPs
-    "123HOST" \
-      |"Digital Storage Company Limited")               echo "123HOST" ;;
-    "AKAMAI-AS")                                        echo "Akamai" ;;
-    "Assistance Publique Hopitaux De Paris")            echo "APHP" ;;
-    "CLOUDFLARENET" \
-      |"Cloudflare Inc")                                 echo "Cloudflare" ;;
-    "BOUYGTEL-ISP" \
-      |"Bouygues Telecom SA")                           echo "Bouygues Telecom" ;;
-    "Free Mobile SAS")                                  echo "Free Mobile" ;;
-    "Free Pro SAS")                                     echo "Free Pro" ;;
-    "Free SAS")                                         echo "Free" ;;
-    "Google DNS" \
-      |"Google LLC" \
-      |"GOOGLE")                                        echo "Google" ;;
-    "IGUANA-WORLDWIDE" \
-      |"Iguane Solutions SAS")                          echo "Iguane Solutions" ;;
-    "OpenDNS, LLC")                                     echo "OpenDNS" ;;
-    "OVH SAS")                                          echo "OVHcloud" ;;
-    "Societe Francaise Du Radiotelephone - SFR SA")     echo "SFR" ;;
-    "VNPT Corp" \
-      |"VIETNAM POSTS AND TELECOMMUNICATIONS GROUP")    echo "VNPT" ;;
-    "ZAYO-6461")                                        echo "Zayo" ;;
-    # Any other raw name that doesn't match the above cases
-    *)                                                  echo "$raw" ;;
-  esac
+  local info canon
+  info="$(operator_info_map "$raw")"
+  canon="${info%%|*}"
+  echo "$canon"
+}
+
+# Resolve a reliable domain for a provider (ISP or DNS) from ASN/org name/IP.
+# Order of resolution:
+#  1) Canonical mapping table (operator_info_map) on normalized org name (stable domains)
+#  2) WHOIS email domain fallback (abuse-mailbox / OrgAbuseEmail / OrgTechEmail)
+#  3) Empty if unresolved
+provider_domain_for() {
+  local asn="$1" org_raw="$2" ip="$3"
+  local info canon domain email_domain
+  info="$(operator_info_map "$org_raw")"
+  canon="${info%%|*}"
+  domain="${info#*|}"
+  # If the map already provides a domain, use it
+  if [[ -n "$domain" && "$domain" != "$canon" ]]; then
+    echo "$domain"; return
+  fi
+  # WHOIS email domain fallback (try multiple common fields)
+  if command -v whois >/dev/null 2>&1 && [[ -n "$asn" ]]; then
+    local whois_out
+    whois_out="$(whois "$asn" 2>/dev/null)"
+    if [[ -z "$whois_out" && -n "$ip" ]]; then
+      whois_out="$(whois "$ip" 2>/dev/null)"
+    fi
+    if [[ -n "$whois_out" ]]; then
+      email_domain=$(printf "%s" "$whois_out" | awk -F: '/abuse-mailbox|OrgAbuseEmail|OrgTechEmail|org-tech-email|abuse-mail/ {print $2}' | awk '{print $1}' | sed 's/.*@//' | head -n1)
+      if [[ -n "$email_domain" ]]; then
+        echo "$email_domain"; return
+      fi
+    fi
+  fi
+  echo ""
 }
 
 #
@@ -320,42 +506,48 @@ pub_ip6=${pub_ip6%%\%*}
 # Ignore non-IPv6 results (fallback to IPv4).
 if [[ -n "$pub_ip6" && "$pub_ip6" != *:* ]]; then pub_ip6=""; fi
 
+
 # Perform reverse DNS lookups (PTR) for public IPs.
 # Join multiple PTR results with a bullet for display.
-ptrs4=$(dig -x "$pub_ip4" +short | awk 'NF')
 hostname4=""
-for p in $ptrs4; do
-  h="${p%.}"
-  # Skip non-standard PTRs (octal escapes like \032, invalid chars, bad labels)
-  if [[ "$h" == *\\* ]]; then continue; fi
-  if ! [[ "$h" =~ ^[A-Za-z0-9.-]+$ ]]; then continue; fi
-  valid=1
-  IFS='.' read -ra labels <<< "$h"
-  for lbl in "${labels[@]}"; do
-    if [[ -z "$lbl" || ${#lbl} -gt 63 ]]; then valid=0; break; fi
-    if ! [[ "$lbl" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then valid=0; break; fi
+if [[ -n "$pub_ip4" ]] && is_ipv4 "$pub_ip4"; then
+  ptrs4=$(dig -x "$pub_ip4" +short | awk 'NF')
+  for p in $ptrs4; do
+    h="${p%.}"
+    # Skip non-standard PTRs (octal escapes like \032, invalid chars, bad labels)
+    if [[ "$h" == *\\* ]]; then continue; fi
+    if ! [[ "$h" =~ ^[A-Za-z0-9.-]+$ ]]; then continue; fi
+    valid=1
+    IFS='.' read -ra labels <<< "$h"
+    for lbl in "${labels[@]}"; do
+      if [[ -z "$lbl" || ${#lbl} -gt 63 ]]; then valid=0; break; fi
+      if ! [[ "$lbl" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then valid=0; break; fi
+    done
+    (( valid )) || continue
+    [[ -n "$hostname4" ]] && hostname4+=" • "
+    hostname4+="$h"
   done
-  (( valid )) || continue
-  [[ -n "$hostname4" ]] && hostname4+=" • "
-  hostname4+="$h"
-done
+fi
 
-ptrs6=$(dig -x "$pub_ip6" +short | awk 'NF')
+
 hostname6=""
-for p in $ptrs6; do
-  h="${p%.}"
-  if [[ "$h" == *\\* ]]; then continue; fi
-  if ! [[ "$h" =~ ^[A-Za-z0-9.-]+$ ]]; then continue; fi
-  valid=1
-  IFS='.' read -ra labels <<< "$h"
-  for lbl in "${labels[@]}"; do
-    if [[ -z "$lbl" || ${#lbl} -gt 63 ]]; then valid=0; break; fi
-    if ! [[ "$lbl" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then valid=0; break; fi
+if [[ -n "$pub_ip6" ]] && is_ipv6 "$pub_ip6"; then
+  ptrs6=$(dig -x "$pub_ip6" +short | awk 'NF')
+  for p in $ptrs6; do
+    h="${p%.}"
+    if [[ "$h" == *\\* ]]; then continue; fi
+    if ! [[ "$h" =~ ^[A-Za-z0-9.-]+$ ]]; then continue; fi
+    valid=1
+    IFS='.' read -ra labels <<< "$h"
+    for lbl in "${labels[@]}"; do
+      if [[ -z "$lbl" || ${#lbl} -gt 63 ]]; then valid=0; break; fi
+      if ! [[ "$lbl" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then valid=0; break; fi
+    done
+    (( valid )) || continue
+    [[ -n "$hostname6" ]] && hostname6+=" • "
+    hostname6+="$h"
   done
-  (( valid )) || continue
-  [[ -n "$hostname6" ]] && hostname6+=" • "
-  hostname6+="$h"
-done
+fi
 
 #
 # Determine default outbound network interface and fetch local IPv4 address.
@@ -394,32 +586,28 @@ fi
 #
 # Fetch ISP logo/icon from CDN, fallback to favicon if unavailable.
 # Encode image in base64 for inline display in SwiftBar menu.
-org_fmt=$(echo "$asn_org" | tr '[:upper:]' '[:lower:]' | sed 's/ /_/g')
-# Logo cache setup
-logo_cache_dir="$HOME/.cache/swiftbar-network-logos"
-mkdir -p "$logo_cache_dir"
-logo_cache_file="${logo_cache_dir}/${org_fmt}_51x51.png"
-image_url="https://static.ui.com/isp/${org_fmt}_51x51.png"
-whois_domain=$(whois "$asn" \
-  | grep -i abuse-mailbox \
-  | cut -d: -f2 \
-  | xargs \
-  | cut -d@ -f2)
-favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${whois_domain}&size=32"
+# --- ISP logo logic: prefer UI logo, fallback to favicon, else no logo ---
+asn_fmt=$(echo "$asn" | tr '[:upper:]' '[:lower:]' | sed 's/as//g')
+image_url="https://static.ui.com/asn/${asn_fmt}_101x101.png"
+whois_domain="$(provider_domain_for "$asn" "$asn_org" "")"
+favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${whois_domain}&size=128"
 
-# TTL for logo cache in seconds (24h)
-logo_ttl=86400
+# TTL for logo/favicons
+logo_ttl=$((24 * 3600))
 
-# Use cached logo if file exists and is less than 24h old, else re-download
-if [[ -s "$logo_cache_file" && $(( $(date +%s) - $(stat -f %m "$logo_cache_file") )) -lt $logo_ttl ]]; then
-  image_enc=$(base64 < "$logo_cache_file")
-else
-  status=$(curl -s -o /dev/null -w '%{http_code}' "$image_url")
-  if [[ "$status" == "200" ]]; then
-    curl -sSL "$image_url" -o "$logo_cache_file"
-    image_enc=$(base64 < "$logo_cache_file")
-  else
-    image_enc=$(curl -sSL "$favicon_url" | base64)
+image_enc=""
+
+# 1) Try cached UI logo (download and cache if needed)
+logo_path="$(cache_url image "$image_url" "$logo_ttl" "" 16 nofollow)"
+if [[ -n "$logo_path" && -s "$logo_path" ]]; then
+  image_enc=$(base64 < "$logo_path")
+fi
+
+# 2) Fallback to favicon service if no logo
+if [[ -z "$image_enc" && -n "$whois_domain" ]]; then
+  fav_path="$(cache_url image "$favicon_url" "$logo_ttl" "" 16)"
+  if [[ -n "$fav_path" && -s "$fav_path" ]]; then
+    image_enc=$(base64 < "$fav_path")
   fi
 fi
 
@@ -453,6 +641,7 @@ fi
 #
 # Map ASN organization to a short, standardized name for display.
 asn_org_f="$(map_operator_name "$asn_org")"
+asn_org_s="$asn_org_f"
 # Truncate operator name if longer than 10 characters, remove trailing space if present
 if [[ ${#asn_org_f} -gt 12 ]]; then
   truncated="$(echo "$asn_org_f" | cut -c1-12)"
@@ -466,7 +655,7 @@ fi
 #   fi
 # fi
 
-exitnode_icon="􀄌" # Par défaut : aucune exit node
+exitnode_icon="􀄌" # Default: no exit node
 if [[ "$exit_node_in_use" == "true" ]]; then
   exitnode_icon="􀄍"
 fi
@@ -474,44 +663,58 @@ echo "${network_icon}  ${asn_org_f} ${ip_icons}${tailscale_bar_icon}${exitnode_i
 
 echo "---"
 # Only display image if set and valid (avoid empty lines when logo is missing).
-if [[ -n "$image_enc" && "${#image_enc}" -gt 100 ]]; then
-  echo "| image=${image_enc}"
-  echo "---"
-fi
+# if [[ -n "$image_enc" && "${#image_enc}" -gt 100 ]]; then
+#   echo " | image=${image_enc}"
+# fi
+
+echo "Fournisseur Internet"
 
 # Show ASN operator name and clickable AS numbers.
 # Handle case where IPv4 and IPv6 ASN differ.
 asn4=$(jq -r '.asn // empty' <<<"$json4")
 asn6=$(jq -r '.asn // empty' <<<"$json6")
+asn=""
+isp_line=""
 if [[ -n "$asn4" && -n "$asn6" ]]; then
   if [[ "$asn4" == "$asn6" ]]; then
-    echo "${asn_org} • $asn4 | href=https://radar.cloudflare.com/$asn4 refresh=true md"
+    asn="$asn4"
+    isp_line+="${asn_org_s} • $asn4"
   else
-    echo "${asn_org} • $asn6 • $asn4 | href=https://radar.cloudflare.com/$asn6 refresh=true"
+    asn="$asn6"
+    isp_line+="${asn_org_s} • $asn6 • $asn4"
   fi
 elif [[ -n "$asn4" ]]; then
-  echo "${asn_org} • $asn4 | href=https://radar.cloudflare.com/$asn4 refresh=true"
+  asn="$asn4"
+  isp_line+="${asn_org_s} • $asn4"
 elif [[ -n "$asn6" ]]; then
-  echo "${asn_org} • $asn6 | href=https://radar.cloudflare.com/$asn6 refresh=true"
+  asn="$asn6"
+  isp_line+="${asn_org_s} • $asn6"
 fi
-echo "---"
-[[ -n "$city"   ]] && echo "${menu_city} : $city | refresh=true"
+# if [[ -n "$whois_domain" ]]; then
+#   echo "→ ${whois_domain} 􀁜 | size=10 href=http://${whois_domain}"
+# fi
+
+isp_localization_line=""
+[[ -n "$city"   ]] && isp_localization_line+="${city}, "
 if [[ -n "$country" ]]; then
   if [[ "$country_eu" == "true" ]]; then
-    echo "${menu_country} : $country $flag 🇪🇺 | refresh=true"
+    isp_localization_line+="${country} ${flag} 🇪🇺"
   else
-    echo "${menu_country} : $country $flag | refresh=true"
+    isp_localization_line+="${country} ${flag}"
   fi
 fi
-[[ -n "$tz"     ]] && echo "${menu_timezone} : $tz | refresh=true"
-echo
+
+echo "${isp_line} • ${isp_localization_line} | href=https://radar.cloudflare.com/${asn} image=${image_enc}"
+
 # If city or country is available, provide menu entry to open location in Apple Maps.
-if [[ -n "$city" || -n "$country" ]]; then
-  query=$(printf '%s %s' "$city" "$country" \
-    | tr '[:upper:]' '[:lower:]' \
-    | sed 's/ /%20/g')
-  echo "${menu_open_in_maps} | href=maps://?q=${query} refresh=true"
-fi
+# if [[ -n "$city" || -n "$country" ]]; then
+#   query=$(printf '%s %s' "$city" "$country" \
+#     | tr '[:upper:]' '[:lower:]' \
+#     | sed 's/ /%20/g')
+#   echo "${isp_localization_line} | href=maps://?q=${query}"
+#   # echo "${menu_open_in_maps} | size=10 href=maps://?q=${query}"
+# fi
+# [[ -n "$tz"     ]] && echo "$tz 􀐫 | size=10"
 
 #
 # Fetch DNS servers used by default interface, separate IPv4 and IPv6.
@@ -571,16 +774,7 @@ gw6=${gw6%%\%*}
 
 echo "---"
 
-#
-# Build section with general network information: host name, search domains, DNS resolver info.
 network_lines=()
-[[ -n "$(hostname)" ]] && network_lines+=("${menu_host_name} : $(hostname) | refresh=true")
-# Get search domains in use and display as a single line.
-search_domains=$(scutil --dns | awk -F': ' '/search domain\[[0-9]+\]/ {print $2}' | sort -u)
-sd=$(echo "$search_domains" | tr '\n' ',' | sed 's/,$//; s/,/ • /g')
-if [[ -n "$sd" ]]; then
-  network_lines+=("${menu_search_domains} : $sd | refresh=true")
-fi
 
 #
 # Fetch DNS resolver information and format label for display.
@@ -601,17 +795,57 @@ if [[ "$nextdns_status" == "ok" ]]; then
     cf_colo_upper=$(echo "$cf_colo" | tr '[:lower:]' '[:upper:]')
     cf_iso=$(cf_colo_to_iso "$cf_colo_upper")
     resolver_flag=$(flag_from_iso "$cf_iso")
-    resolver_display="$resolver_name • $resolver_proto • $resolver_server"
+    resolver_display="$resolver_name"
+    # Append ASN after provider name if available (done below after ASN is fetched)
+    resolver_display+=" • $resolver_proto • $resolver_server"
     if [[ -n "$resolver_flag" ]]; then
       resolver_display+=" $resolver_flag"
     fi
   else
-    resolver_display="$resolver_name • $resolver_proto • $resolver_server"
+    resolver_display="$resolver_name"
+    # Append ASN after provider name if available (done below after ASN is fetched)
+    resolver_display+=" • $resolver_proto • $resolver_server"
   fi
   # Measure DNS latency for the resolver: try ICMP ping, fallback to DNS query latency via system resolver.
   resolver_ip="$resolver_server"
   if [[ "$resolver_name" == "NextDNS" ]]; then
     resolver_ip=$(echo "$nextdns_test_json" | jq -r '.destIP // empty')
+  fi
+
+  # --- DNS provider logo (UI ASN, fallback to favicon) ---
+  dns_image_enc=""
+  dns_asn=""; dns_asn_org=""; dns_whois_domain=""; dns_logo_path=""; dns_fav_path=""
+  if [[ -n "$resolver_ip" ]]; then
+    dns_info_json=$(cache_url json "https://ip.rslt.fr/json?ip=$resolver_ip" "$IP_JSON_TTL")
+    dns_asn=$(echo "$dns_info_json" | jq -r '.asn // empty')
+    dns_asn_org=$(echo "$dns_info_json" | jq -r '.asn_org // empty')
+    dns_country_eu=$(echo "$dns_info_json" | jq -r '.country_eu // empty')
+    # Append ASN after DNS provider name (right after provider name, before other info)
+    if [[ -n "$dns_asn" ]]; then
+      resolver_display="${resolver_display/NextDNS/NextDNS (AS$dns_asn)}"
+    fi
+  fi
+  # Append EU flag if resolver is in the EU (based on ip.rslt.fr JSON), similar to ISP logic
+  if [[ "$dns_country_eu" == "true" && "$resolver_display" != *"🇪🇺"* ]]; then
+    resolver_display+=" 🇪🇺"
+  fi
+  if [[ -n "$dns_asn" ]]; then
+    dns_asn_fmt=$(echo "$dns_asn" | tr '[:upper:]' '[:lower:]' | sed 's/as//g')
+    dns_image_url="https://static.ui.com/asn/${dns_asn_fmt}_101x101.png"
+    dns_logo_path="$(cache_url image "$dns_image_url" "$logo_ttl" "" 16 nofollow)"
+    if [[ -n "$dns_logo_path" && -s "$dns_logo_path" ]]; then
+      dns_image_enc=$(base64 < "$dns_logo_path")
+    fi
+    if [[ -z "$dns_image_enc" ]]; then
+      dns_whois_domain="$(provider_domain_for "$dns_asn" "$dns_asn_org" "$resolver_ip")"
+      if [[ -n "$dns_whois_domain" ]]; then
+        dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${dns_whois_domain}&size=128"
+        dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
+        if [[ -n "$dns_fav_path" && -s "$dns_fav_path" ]]; then
+          dns_image_enc=$(base64 < "$dns_fav_path")
+        fi
+      fi
+    fi
   fi
 
   dns_latency=""
@@ -650,29 +884,46 @@ if [[ "$nextdns_status" == "ok" ]]; then
     dns_latency_avg="${dns_latency} ms"
   fi
   # --- PTR lookup for resolver_ip ---
-  resolver_ptr=$(dig -x "$resolver_ip" +short | awk 'NF' \
-    | sed 's/\.$//' \
-    | awk '!/\\/' \
-    | awk '/^[A-Za-z0-9.-]+$/' \
-    | head -n1)
+  resolver_ptr=""
+  if [[ -n "$resolver_ip" ]] && { is_ipv4 "$resolver_ip" || is_ipv6 "$resolver_ip"; }; then
+    resolver_ptr=$(dig -x "$resolver_ip" +short | awk 'NF' \
+      | sed 's/\.$//' \
+      | awk '!/\\/' \
+      | awk '/^[A-Za-z0-9.-]+$/' \
+      | head -n1)
+  fi
   # Append PTR if not empty and not already present
   if [[ -n "$resolver_ptr" && "$resolver_display" != *"$resolver_ptr"* ]]; then
     resolver_display+=" • $resolver_ptr"
   fi
   case "$lang" in
-    fr) resolver_label="DNS : $resolver_display | refresh=true" ;;
-    *)  resolver_label="DNS: $resolver_display | refresh=true" ;;
+    fr)
+      if [[ -n "$dns_image_enc" ]]; then
+        resolver_label="$resolver_display | image=${dns_image_enc} refresh=true"
+      else
+        resolver_label="$resolver_display | refresh=true"
+      fi
+      ;;
+    *)
+      if [[ -n "$dns_image_enc" ]]; then
+        resolver_label="DNS: $resolver_display | image=${dns_image_enc} refresh=true"
+      else
+        resolver_label="DNS: $resolver_display | refresh=true"
+      fi
+      ;;
   esac
   if [[ -n "$dns_latency_avg" ]]; then
     resolver_display+=" • $dns_latency_avg"
     resolver_label="${resolver_label%| refresh=true} • $dns_latency_avg | refresh=true"
+    resolver_label="${resolver_label%| image=* refresh=true} • $dns_latency_avg | image=${dns_image_enc} refresh=true"
   fi
 else
   resolver_ip=$(curl -sL https://test.nextdns.io/ | jq -r '.resolver // empty')
   if [[ -n "$resolver_ip" ]]; then
-    dns_info_json=$(curl -sL --max-time 3 "https://ip.rslt.fr/json?ip=$resolver_ip")
+    dns_info_json=$(cache_url json "https://ip.rslt.fr/json?ip=$resolver_ip" "$IP_JSON_TTL")
     resolver_name=$(echo "$dns_info_json" | jq -r '.asn_org // empty')
     resolver_name="$(map_operator_name "$resolver_name")"
+    dns_asn=$(echo "$dns_info_json" | jq -r '.asn // empty')
   fi
   dns_latency=""
   dns_latency=""
@@ -714,18 +965,59 @@ else
   if [[ -n "$resolver_name" && "$resolver_name" != "null" ]]; then
     resolver_flag=""
     resolver_info="$resolver_name"
+    # Append ASN after DNS provider name (right after provider name, before other info)
+    if [[ -n "$dns_asn" ]]; then
+      resolver_info+=" • $dns_asn"
+    fi
     # For other resolvers: fetch city and country via ip.rslt.fr/json and build flag.
-    dns_info_json=$(curl -sL "https://ip.rslt.fr/json?ip=$resolver_ip")
+    dns_info_json=$(cache_url json "https://ip.rslt.fr/json?ip=$resolver_ip" "$IP_JSON_TTL")
     dns_country_iso=$(echo "$dns_info_json" | jq -r '.country_iso // empty')
+    dns_country=$(echo "$dns_info_json" | jq -r '.country // empty')
     dns_city=$(echo "$dns_info_json" | jq -r '.city // empty')
+    dns_country_eu=$(echo "$dns_info_json" | jq -r '.country_eu // empty')
+
+    # --- DNS provider logo (UI ASN, fallback to favicon) ---
+    dns_image_enc=""
+    # dns_asn already set above
+    if [[ -n "$dns_asn" ]]; then
+      dns_asn_fmt=$(echo "$dns_asn" | tr '[:upper:]' '[:lower:]' | sed 's/as//g')
+      dns_image_url="https://static.ui.com/asn/${dns_asn_fmt}_101x101.png"
+      dns_logo_path="$(cache_url image "$dns_image_url" "$logo_ttl" "" 16 nofollow)"
+      if [[ -n "$dns_logo_path" && -s "$dns_logo_path" ]]; then
+        dns_image_enc=$(base64 < "$dns_logo_path")
+      fi
+      if [[ -z "$dns_image_enc" ]]; then
+        dns_whois_domain="$(provider_domain_for "$dns_asn" "$(echo "$dns_info_json" | jq -r '.asn_org // empty')" "$resolver_ip")"
+        if [[ -n "$dns_whois_domain" ]]; then
+          dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${dns_whois_domain}&size=128"
+          dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
+          if [[ -n "$dns_fav_path" && -s "$dns_fav_path" ]]; then
+            dns_image_enc=$(base64 < "$dns_fav_path")
+          fi
+        fi
+      fi
+    fi
+
     resolver_flag=$(flag_from_iso "$dns_country_iso")
 
+    resolver_location=""
+
     if [[ -n "$dns_city" ]]; then
-      resolver_info="${resolver_info} • $dns_city"
+      resolver_location+="${dns_city}, "
     fi
+
+    if [[ -n "$dns_country" ]]; then
+      resolver_location+="${dns_country}"
+    fi
+
+    resolver_info+=" • ${resolver_location}"
 
     if [[ -n "$resolver_flag" ]]; then
       resolver_info="${resolver_info} $resolver_flag"
+    fi
+    # Append EU flag if resolver is in the EU (based on ip.rslt.fr JSON), similar to ISP logic
+    if [[ "$dns_country_eu" == "true" ]]; then
+      resolver_info+=" 🇪🇺"
     fi
 
     if [[ "$resolver_name" == "Cloudflare" ]]; then
@@ -736,11 +1028,14 @@ else
       fi
     fi
     # --- PTR lookup for resolver_ip ---
-    resolver_ptr=$(dig -x "$resolver_ip" +short | awk 'NF' \
-      | sed 's/\.$//' \
-      | awk '!/\\/' \
-      | awk '/^[A-Za-z0-9.-]+$/' \
-      | head -n1)
+    resolver_ptr=""
+    if [[ -n "$resolver_ip" ]] && { is_ipv4 "$resolver_ip" || is_ipv6 "$resolver_ip"; }; then
+      resolver_ptr=$(dig -x "$resolver_ip" +short | awk 'NF' \
+        | sed 's/\.$//' \
+        | awk '!/\\/' \
+        | awk '/^[A-Za-z0-9.-]+$/' \
+        | head -n1)
+    fi
     if [[ -n "$resolver_ptr" && "$resolver_info" != *"$resolver_ptr"* ]]; then
       resolver_info+=" • $resolver_ptr"
     fi
@@ -751,32 +1046,51 @@ else
   fi
 
   case "$lang" in
-    fr) resolver_label="DNS : $resolver_info | refresh=true" ;;
-    *)  resolver_label="DNS: $resolver_info | refresh=true" ;;
+    fr)
+      if [[ -n "$dns_image_enc" ]]; then
+        resolver_label="$resolver_info | image=${dns_image_enc} refresh=true"
+      else
+        resolver_label="$resolver_info | refresh=true"
+      fi
+      ;;
+    *)
+      if [[ -n "$dns_image_enc" ]]; then
+        resolver_label="$resolver_info | image=${dns_image_enc} refresh=true"
+      else
+        resolver_label="$resolver_info | refresh=true"
+      fi
+      ;;
   esac
 fi
 
 if [[ -n "$resolver_label" ]]; then
-  if [[ -n "$resolver_label" && -n "$dns_latency_avg" && "$resolver_label" != *"$dns_latency_avg"* ]]; then
+  # Append latency once if not already present
+  if [[ -n "$dns_latency_avg" && "$resolver_label" != *"$dns_latency_avg"* ]]; then
     resolver_label="${resolver_label%| refresh=true} • $dns_latency_avg | refresh=true"
   fi
-  if [[ -n "$sd" ]]; then
-    network_lines+=("$resolver_label")
-    if [[ ${#network_lines[@]} -ge 2 ]]; then
-      tmp=("${network_lines[@]:0:2}" "$resolver_label" "${network_lines[@]:2:${#network_lines[@]}-2-1}")
-      network_lines=("${tmp[@]}")
-    fi
-  else
-    network_lines+=("$resolver_label")
-    if [[ ${#network_lines[@]} -ge 1 ]]; then
-      tmp=("${network_lines[@]:0:1}" "$resolver_label" "${network_lines[@]:1:${#network_lines[@]}-1-1}")
-      network_lines=("${tmp[@]}")
-    fi
+  # Insert a separator under local DNS info (host name, search domains) before the public resolver line
+  if [[ ${#network_lines[@]} -gt 0 ]]; then
+    network_lines+=("---")
   fi
+  network_lines+=("$resolver_label")
+fi
+
+#
+# Build section with general network information: host name, search domains, DNS resolver info.
+
+network_lines+=("---")
+network_lines+=("${menu_network}")
+
+[[ -n "$(hostname)" ]] && network_lines+=("${menu_host_name} : $(hostname) | refresh=true")
+# Get search domains in use and display as a single line.
+search_domains=$(scutil --dns | awk -F': ' '/search domain\[[0-9]+\]/ {print $2}' | sort -u)
+sd=$(echo "$search_domains" | tr '\n' ',' | sed 's/,$//; s/,/ • /g')
+if [[ -n "$sd" ]]; then
+  network_lines+=("${menu_search_domains} : $sd | refresh=true")
 fi
 
 if [[ ${#network_lines[@]} -gt 0 ]]; then
-  echo "${menu_network}"
+  echo "${menu_dns_provider}"
   printf "%s\n" "${network_lines[@]}"
   echo "---"
 fi
@@ -1010,22 +1324,22 @@ if [[ "$ts_online" == "true" ]]; then
     active_exit_ip=$(echo "$ts_json" | jq -r --arg id "$exit_node_id" '.Peer[] | select(.ID == $id) | .TailscaleIPs[]? | select(test(":") | not)')
   fi
 
-  if [[ -n "$magicdns_org" || -n "$magicdns_domain" ]]; then
-    org_domain_str=""
-    [[ -n "$magicdns_org" ]] && org_domain_str="$magicdns_org"
-    if [[ -n "$magicdns_domain" ]]; then
-      [[ -n "$org_domain_str" ]] && org_domain_str+=" • "
-      org_domain_str+="$magicdns_domain"
+    if [[ -n "$magicdns_org" || -n "$magicdns_domain" ]]; then
+      org_domain_str=""
+      [[ -n "$magicdns_org" ]] && org_domain_str="$magicdns_org"
+      if [[ -n "$magicdns_domain" ]]; then
+        [[ -n "$org_domain_str" ]] && org_domain_str+=" • "
+        org_domain_str+="$magicdns_domain"
+      fi
+      ts_lines+=("$org_domain_str | refresh=true")
+      # Add Tailscale IPv6 then IPv4 immediately below
+      if [[ -n "$ts_ip6" ]]; then
+        ts_lines+=("${menu_ipv6} : $ts_ip6 | refresh=true")
+      fi
+      if [[ -n "$ts_ip4" ]]; then
+        ts_lines+=("${menu_ipv4} : $ts_ip4 | refresh=true")
+      fi
     fi
-    ts_lines+=("$org_domain_str | refresh=true")
-    # Ajouter l’IPv6 puis l’IPv4 Tailscale juste après
-    if [[ -n "$ts_ip6" ]]; then
-      ts_lines+=("${menu_ipv6} : $ts_ip6 | refresh=true")
-    fi
-    if [[ -n "$ts_ip4" ]]; then
-      ts_lines+=("${menu_ipv4} : $ts_ip4 | refresh=true")
-    fi
-  fi
   #
   # Map DERP relay code to ISO country code for flag display.
   derp_to_iso() {
@@ -1371,7 +1685,7 @@ if [[ "$ts_online" == "true" ]]; then
           _status=$(echo "$info" | cut -d'|' -f4)
           [[ "$_country" == "-" ]] && continue
 
-          # Cherche l'index du pays, ou l'ajoute
+          # Find the country index or create it if not present
           found_idx=""
           for i in "${!countries_list[@]}"; do
             if [[ "${countries_list[$i]}" == "$_country" ]]; then found_idx=$i; break; fi
@@ -1401,9 +1715,9 @@ if [[ "$ts_online" == "true" ]]; then
               auto_label="→ Automatic"
             fi
             node_line="----$auto_label | bash=\"/Applications/Tailscale.app/Contents/MacOS/Tailscale\" param1=\"set\" param2=\"--exit-node\" param3=\"$_host\" terminal=false refresh=true"
-            # Place en tête dans la concaténation (Any toujours premier)
+            # Prepend to keep "Any" first in the list
             country_nodes[$found_idx]="$node_line"${country_nodes[$found_idx]:+"${country_nodes[$found_idx]}"}
-            # Mémorise qu'il faudra séparer plus bas si d'autres villes
+            # Mark a split to separate later when other cities exist
             country_nodes[$found_idx]+="__SPLIT__"
           else
             if [[ -n "$city_display" ]]; then
@@ -1435,7 +1749,7 @@ if [[ "$ts_online" == "true" ]]; then
             after_sep="${_nodes#*__SPLIT__}"
             [ -n "$before_sep" ] && exitnodes_lines+=("$before_sep")
             [ -n "$after_sep" ] && exitnodes_lines+=("-------")
-            # Nettoyer le retour chariot initial éventuel
+            # Clean up any leading empty line
             after_sep_clean=$(echo "$after_sep" | sed '/^$/d')
             [ -n "$after_sep_clean" ] && exitnodes_lines+=("$after_sep_clean")
           else
