@@ -231,6 +231,8 @@ if command -v curl >/dev/null 2>&1; then
 fi
 # TTL for ip.rslt.fr/json?ip=... lookups (cache for 24h)
 IP_JSON_TTL=$((24 * 3600))  # 24h cache for ip.rslt.fr/json?ip=...
+# TTL for NextDNS resolver name API (cache for 7 days)
+NEXTDNS_RESOLVER_TTL=$((7 * 24 * 3600))
 # --- end helpers & caches -----------------------------------------------------
 
 #
@@ -377,8 +379,23 @@ operator_info_map() {
     "ZAYO-6461")                                        echo "Zayo|zayo.com" ;;
     "NextDNS")                                          echo "NextDNS|nextdns.io" ;;
     "AdGuard"|"Adguard")                                echo "AdGuard|adguard.com" ;;
-    "Quad9"|"QUAD9")                                    echo "Quad9|quad9.net" ;;
-    *)                                                   echo "${raw}|" ;;
+    "quad9"|"Quad9"|"QUAD9")                            echo "Quad9|quad9.net" ;;
+    "Private Layer INC")                                echo "Private Layer|privatelayer.com" ;;
+    *)                                                  echo "${raw}|" ;;
+  esac
+}
+
+# Map resolver reverse DNS (PTR) domain suffix to a canonical provider name.
+# Returns empty string if no mapping matches.
+resolver_name_from_ptr() {
+  local ptr="$1"
+  [[ -z "$ptr" ]] && { echo ""; return; }
+  # Strip trailing dot if present and lowercase
+  local host
+  host=$(echo "${ptr%.}" | tr '[:upper:]' '[:lower:]')
+  case "$host" in
+    *.quad9.net)            echo "Quad9" ;;
+    *) echo "" ;;
   esac
 }
 
@@ -822,7 +839,7 @@ if [[ "$nextdns_status" == "ok" ]]; then
     dns_country_eu=$(echo "$dns_info_json" | jq -r '.country_eu // empty')
     # Append ASN after DNS provider name (right after provider name, before other info)
     if [[ -n "$dns_asn" ]]; then
-      resolver_display="${resolver_display/NextDNS/NextDNS (AS$dns_asn)}"
+      resolver_display="${resolver_display/NextDNS/NextDNS • $dns_asn}"
     fi
   fi
   # Append EU flag if resolver is in the EU (based on ip.rslt.fr JSON), similar to ISP logic
@@ -837,13 +854,42 @@ if [[ "$nextdns_status" == "ok" ]]; then
       dns_image_enc=$(base64 < "$dns_logo_path")
     fi
     if [[ -z "$dns_image_enc" ]]; then
-      dns_whois_domain="$(provider_domain_for "$dns_asn" "$dns_asn_org" "$resolver_ip")"
+      # Prefer domain from operator_info_map based on resolver name (e.g., "NextDNS" → nextdns.io)
+      dns_whois_domain=""
+      info_from_name="$(operator_info_map "$resolver_name")"
+      domain_from_name="${info_from_name#*|}"
+      if [[ -n "$domain_from_name" && "$domain_from_name" != "$resolver_name" ]]; then
+        dns_whois_domain="$domain_from_name"
+      fi
+      # Fallback to WHOIS-based resolution if mapping did not yield a domain
+      if [[ -z "$dns_whois_domain" ]]; then
+        dns_whois_domain="$(provider_domain_for "$dns_asn" "$dns_asn_org" "$resolver_ip")"
+      fi
       if [[ -n "$dns_whois_domain" ]]; then
         dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${dns_whois_domain}&size=128"
         dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
         if [[ -n "$dns_fav_path" && -s "$dns_fav_path" ]]; then
           dns_image_enc=$(base64 < "$dns_fav_path")
         fi
+      fi
+    fi
+  fi
+  # If no image yet (e.g., missing ASN), try favicon based on provider name mapping
+  if [[ -z "$dns_image_enc" ]]; then
+    dns_whois_domain=""
+    info_from_name="$(operator_info_map "$resolver_name")"
+    domain_from_name="${info_from_name#*|}"
+    if [[ -n "$domain_from_name" && "$domain_from_name" != "$resolver_name" ]]; then
+      dns_whois_domain="$domain_from_name"
+    fi
+    if [[ -z "$dns_whois_domain" ]]; then
+      dns_whois_domain="$(provider_domain_for "$dns_asn" "$dns_asn_org" "$resolver_ip")"
+    fi
+    if [[ -n "$dns_whois_domain" ]]; then
+      dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${dns_whois_domain}&size=128"
+      dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
+      if [[ -n "$dns_fav_path" && -s "$dns_fav_path" ]]; then
+        dns_image_enc=$(base64 < "$dns_fav_path")
       fi
     fi
   fi
@@ -920,9 +966,19 @@ if [[ "$nextdns_status" == "ok" ]]; then
 else
   resolver_ip=$(curl -sL https://test.nextdns.io/ | jq -r '.resolver // empty')
   if [[ -n "$resolver_ip" ]]; then
+    # Prefer NextDNS resolver-name API (cached 7 days); fallback to ip.rslt.fr org name
+    ndns_name_json=$(cache_url json "https://api.nextdns.io/resolver/$resolver_ip" "$NEXTDNS_RESOLVER_TTL")
+    resolver_name_api=$(echo "$ndns_name_json" | jq -r '.name // empty')
+
     dns_info_json=$(cache_url json "https://ip.rslt.fr/json?ip=$resolver_ip" "$IP_JSON_TTL")
-    resolver_name=$(echo "$dns_info_json" | jq -r '.asn_org // empty')
-    resolver_name="$(map_operator_name "$resolver_name")"
+
+    if [[ -n "$resolver_name_api" && "$resolver_name_api" != "null" ]]; then
+      resolver_name="$(map_operator_name "$resolver_name_api")"
+    else
+      resolver_name=$(echo "$dns_info_json" | jq -r '.asn_org // empty')
+      resolver_name="$(map_operator_name "$resolver_name")"
+    fi
+
     dns_asn=$(echo "$dns_info_json" | jq -r '.asn // empty')
   fi
   dns_latency=""
@@ -987,7 +1043,19 @@ else
         dns_image_enc=$(base64 < "$dns_logo_path")
       fi
       if [[ -z "$dns_image_enc" ]]; then
-        dns_whois_domain="$(provider_domain_for "$dns_asn" "$(echo "$dns_info_json" | jq -r '.asn_org // empty')" "$resolver_ip")"
+        # Prefer domain from operator_info_map when the resolver name was returned by NextDNS API
+        dns_whois_domain=""
+        if [[ -n "$resolver_name_api" && "$resolver_name_api" != "null" ]]; then
+          info_from_api="$(operator_info_map "$resolver_name_api")"
+          domain_from_api="${info_from_api#*|}"
+          if [[ -n "$domain_from_api" && "$domain_from_api" != "$resolver_name_api" ]]; then
+            dns_whois_domain="$domain_from_api"
+          fi
+        fi
+        # Fallback to WHOIS-based domain if mapping did not yield a domain
+        if [[ -z "$dns_whois_domain" ]]; then
+          dns_whois_domain="$(provider_domain_for "$dns_asn" "$(echo "$dns_info_json" | jq -r '.asn_org // empty')" "$resolver_ip")"
+        fi
         if [[ -n "$dns_whois_domain" ]]; then
           dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${dns_whois_domain}&size=128"
           dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
@@ -1036,8 +1104,49 @@ else
         | awk '/^[A-Za-z0-9.-]+$/' \
         | head -n1)
     fi
-    if [[ -n "$resolver_ptr" && "$resolver_info" != *"$resolver_ptr"* ]]; then
-      resolver_info+=" • $resolver_ptr"
+    # If PTR indicates a known provider (e.g., *.quad9.net), adjust resolver name accordingly
+    if [[ -n "$resolver_ptr" ]]; then
+      mapped_provider="$(resolver_name_from_ptr "$resolver_ptr")"
+      if [[ -n "$mapped_provider" ]]; then
+        old_resolver_name="$resolver_name"
+        resolver_name="$(map_operator_name "$mapped_provider")"
+        # If resolver_info currently starts with the old name, replace it with the new mapped name
+        if [[ "$resolver_info" == "$old_resolver_name"* ]]; then
+          resolver_info="$resolver_name${resolver_info#$old_resolver_name}"
+        fi
+      fi
+      # Append PTR if not already present
+      if [[ "$resolver_info" != *"$resolver_ptr"* ]]; then
+        resolver_info+=" • $resolver_ptr"
+      fi
+    fi
+    # If we still have no icon, try favicon based on the (possibly remapped) resolver name, else fall back to WHOIS
+    if [[ -z "$dns_image_enc" ]]; then
+      dns_whois_domain=""
+      if [[ -n "$resolver_name" ]]; then
+        info_from_name="$(operator_info_map "$resolver_name")"
+        domain_from_name="${info_from_name#*|}"
+        if [[ -n "$domain_from_name" && "$domain_from_name" != "$resolver_name" ]]; then
+          dns_whois_domain="$domain_from_name"
+        fi
+      fi
+      if [[ -z "$dns_whois_domain" && -n "$resolver_name_api" && "$resolver_name_api" != "null" ]]; then
+        info_from_api="$(operator_info_map "$resolver_name_api")"
+        domain_from_api="${info_from_api#*|}"
+        if [[ -n "$domain_from_api" && "$domain_from_api" != "$resolver_name_api" ]]; then
+          dns_whois_domain="$domain_from_api"
+        fi
+      fi
+      if [[ -z "$dns_whois_domain" ]]; then
+        dns_whois_domain="$(provider_domain_for "$dns_asn" "$(echo "$dns_info_json" | jq -r '.asn_org // empty')" "$resolver_ip")"
+      fi
+      if [[ -n "$dns_whois_domain" ]]; then
+        dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${dns_whois_domain}&size=128"
+        dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
+        if [[ -n "$dns_fav_path" && -s "$dns_fav_path" ]]; then
+          dns_image_enc=$(base64 < "$dns_fav_path")
+        fi
+      fi
     fi
   fi
 
