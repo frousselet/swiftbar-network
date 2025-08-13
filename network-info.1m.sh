@@ -1533,6 +1533,61 @@ if [[ "$ts_online" == "true" ]]; then
     ts_lines+=("$derp_info | refresh=true")
   fi
 
+
+# ICI
+
+
+  # --------- PATCH: Tailscale accounts switcher ---------
+  print_tailscale_accounts() {
+    case "$lang" in
+      fr)
+        accounts_label="Comptes"
+        current_label="Actuel"
+        ;;
+      *)
+        accounts_label="Accounts"
+        current_label="Current"
+        ;;
+    esac
+
+    # Fetch list; skip header line
+    accounts_raw=$($TS_BIN switch --list 2>/dev/null | awk 'NR>1')
+    [[ -z "$accounts_raw" ]] && return
+
+    # Build menu lines
+    acc_lines=("→ $accounts_label")
+    # Each line: ID  Tailnet  Account (with a trailing * for current)
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      id=$(echo "$line" | awk '{print $1}')
+      tailnet=$(echo "$line" | awk '{print $2}')
+      account=$(echo "$line" | awk '{print $3}')
+      [[ -z "$id" || -z "$tailnet" || -z "$account" ]] && continue
+
+      if [[ "$account" == *"*" ]]; then
+        account_disp=${account%*}
+        # Strip possible trailing star safely
+        account_disp=$(echo "$account_disp" | sed 's/\*$//')
+        # Current account: no action
+        acc_lines+=("--$current_label • $tailnet • $account_disp")
+      else
+        account_disp="$account"
+        # Switch to this account
+        acc_lines+=("--$tailnet • $account_disp | bash=\"/bin/bash\" param1=\"-lc\" param2=\"$TS_BIN switch '$account_disp'\" terminal=false refresh=true")
+      fi
+    done <<< "$accounts_raw"
+
+    # Append to Tailscale section
+    if [[ ${#acc_lines[@]} -gt 1 ]]; then
+      ts_lines+=("${acc_lines[@]}")
+    fi
+  }
+  print_tailscale_accounts
+  # --------- END PATCH: Tailscale accounts switcher ---------
+
+
+
+
   #
   # List all Tailscale peers (machines) with their status, OS, tags, and relay info.
   # Avoid duplicates and handle both online and offline peers.
@@ -1806,10 +1861,10 @@ if [[ "$ts_online" == "true" ]]; then
           # Actions
           if [[ "$autosuggest_follow" == "yes" ]]; then
             # Désactiver: only disable auto-follow, keep current exit node
-            exitnodes_lines+=("--→ Désactiver | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'\" terminal=false refresh=true")
+            exitnodes_lines+=("--→ Désactiver la sélection automatique | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'\" terminal=false refresh=true")
           else
             # Activer: enable auto-follow AND connect to the suggested exit node now
-            exitnodes_lines+=("--→ Activer | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo yes > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node=$suggested_exit_node\" terminal=false refresh=true")
+            exitnodes_lines+=("--→ Activer la sélection automatique | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo yes > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node=$suggested_exit_node\" terminal=false refresh=true")
           fi
         else
           # Header with suggested node name (without trailing dot)
@@ -1817,10 +1872,10 @@ if [[ "$ts_online" == "true" ]]; then
           # Actions
           if [[ "$autosuggest_follow" == "yes" ]]; then
             # Disable: only disable auto-follow, keep current exit node
-            exitnodes_lines+=("--→ Disable | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'\" terminal=false refresh=true")
+            exitnodes_lines+=("--→ Disable automatic selection | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'\" terminal=false refresh=true")
           else
             # Enable: enable auto-follow AND connect to the suggested exit node now
-            exitnodes_lines+=("--→ Enable | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo yes > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node=$suggested_exit_node\" terminal=false refresh=true")
+            exitnodes_lines+=("--→ Enable automatic selection | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo yes > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node=$suggested_exit_node\" terminal=false refresh=true")
           fi
         fi
         exitnodes_lines+=("-----")
