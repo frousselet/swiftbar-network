@@ -47,6 +47,16 @@ is_ipv6() {
 CACHEDIR="${HOME}/.cache/swiftbar-network-info"
 mkdir -p "$CACHEDIR"
 
+# File to store whether we auto-follow the suggested Tailscale exit node ("yes"/"no")
+TS_AUTOSUG_FILE="${CACHEDIR}/tailscale_exitnode_autosuggest"
+
+# Resolve Tailscale binary path (CLI or App bundle fallback) and export for SwiftBar actions
+TS_BIN="$(command -v tailscale || true)"
+if [[ -z "$TS_BIN" && -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]]; then
+  TS_BIN="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+fi
+export TS_BIN
+
 
 # ensure_icon_size: center-crop to square and resize to NxN (best-effort)
 ensure_icon_size() {
@@ -365,11 +375,12 @@ operator_info_map() {
     "AKAMAI-AS")                                        echo "Akamai|akamai.com" ;;
     "Assistance Publique Hopitaux De Paris")            echo "AP-HP|aphp.fr" ;;
     "CLOUDFLARENET"|"Cloudflare Inc")                    echo "Cloudflare|cloudflare.com" ;;
+    "CLOUDSINGULARITY")                                 echo "Tech Futures Interactive Inc.|techfutures.xyz" ;;
     "BOUYGTEL-ISP"|"Bouygues Telecom SA")               echo "Bouygues Telecom|bouyguestelecom.fr" ;;
-    "CISCO-UMBRELLA")                                   echo "Cisco Umbrella|opendns.com" ;;
+    "CISCO-UMBRELLA")                                   echo "Cisco Umbrella|cisco.com" ;;
     "OpenDNS, LLC")                                     echo "OpenDNS|opendns.com" ;;
-    "Free Mobile SAS")                                  echo "Free Mobile|free.fr" ;;
-    "Free Pro SAS")                                     echo "Free Pro|free.fr" ;;
+    "Free Mobile SAS")                                  echo "Free Mobile|mobile.free.fr" ;;
+    "Free Pro SAS")                                     echo "Free Pro|freepro.com" ;;
     "Free SAS")                                         echo "Free|free.fr" ;;
     "Google DNS"|"Google LLC"|"GOOGLE")                 echo "Google|google.com" ;;
     "IGUANA-WORLDWIDE"|"Iguane Solutions SAS")          echo "Iguane Solutions|iguanesolutions.com" ;;
@@ -381,6 +392,8 @@ operator_info_map() {
     "AdGuard"|"Adguard")                                echo "AdGuard|adguard.com" ;;
     "quad9"|"Quad9"|"QUAD9")                            echo "Quad9|quad9.net" ;;
     "Private Layer INC")                                echo "Private Layer|privatelayer.com" ;;
+    "HostRoyale Technologies Pvt Ltd")                  echo "HostRoyale|hostroyale.com" ;;
+    "Keminet SHPK")                                     echo "Keminet|keminet.net" ;;
     *)                                                  echo "${raw}|" ;;
   esac
 }
@@ -395,6 +408,7 @@ resolver_name_from_ptr() {
   host=$(echo "${ptr%.}" | tr '[:upper:]' '[:lower:]')
   case "$host" in
     *.quad9.net)            echo "Quad9" ;;
+    *.pch.net)              echo "Quad9" ;;
     *) echo "" ;;
   esac
 }
@@ -695,17 +709,17 @@ isp_line=""
 if [[ -n "$asn4" && -n "$asn6" ]]; then
   if [[ "$asn4" == "$asn6" ]]; then
     asn="$asn4"
-    isp_line+="${asn_org_s} • $asn4"
+    isp_line+="${asn_org_s} • 􀃔􀃐 $asn4"
   else
     asn="$asn6"
-    isp_line+="${asn_org_s} • $asn6 • $asn4"
+    isp_line+="${asn_org_s} • 􀃔 $asn6 • 􀃐 $asn4"
   fi
 elif [[ -n "$asn4" ]]; then
   asn="$asn4"
-  isp_line+="${asn_org_s} • $asn4"
+  isp_line+="${asn_org_s} • 􀃐 $asn4"
 elif [[ -n "$asn6" ]]; then
   asn="$asn6"
-  isp_line+="${asn_org_s} • $asn6"
+  isp_line+="${asn_org_s} • 􀃔 $asn6"
 fi
 # if [[ -n "$whois_domain" ]]; then
 #   echo "→ ${whois_domain} 􀁜 | size=10 href=http://${whois_domain}"
@@ -721,7 +735,23 @@ if [[ -n "$country" ]]; then
   fi
 fi
 
-echo "${isp_line} • ${isp_localization_line} | href=https://radar.cloudflare.com/${asn} image=${image_enc}"
+echo "${isp_line} • ${isp_localization_line} | image=${image_enc}"
+
+# Submenu: direct links to Cloudflare Radar for IPv4/IPv6 ASNs
+
+if [[ -n "$asn4" && -n "$asn6" ]]; then
+  echo "--Cloudflare Radar"
+  if [[ "$asn4" == "$asn6" ]]; then
+    echo "--􀃔􀃐 ${asn4} | href=https://radar.cloudflare.com/${asn4}"
+  else
+    echo "--􀃔 $asn6 | href=https://radar.cloudflare.com/$asn6"
+    echo "--􀃐 $asn4 | href=https://radar.cloudflare.com/$asn4"
+  fi
+elif [[ -n "$asn4" ]]; then
+  echo "--􀃐 ${asn4} | href=https://radar.cloudflare.com/${asn4}"
+elif [[ -n "$asn6" ]]; then
+   echo "--􀃔 ${asn6} | href=https://radar.cloudflare.com/${asn6}"
+fi
 
 # If city or country is available, provide menu entry to open location in Apple Maps.
 # if [[ -n "$city" || -n "$country" ]]; then
@@ -829,7 +859,7 @@ if [[ "$nextdns_status" == "ok" ]]; then
     resolver_ip=$(echo "$nextdns_test_json" | jq -r '.destIP // empty')
   fi
 
-  # --- DNS provider logo (UI ASN, fallback to favicon) ---
+  # --- DNS provider icon: prefer favicon via mapped name, then UI ASN, then WHOIS favicon ---
   dns_image_enc=""
   dns_asn=""; dns_asn_org=""; dns_whois_domain=""; dns_logo_path=""; dns_fav_path=""
   if [[ -n "$resolver_ip" ]]; then
@@ -838,53 +868,32 @@ if [[ "$nextdns_status" == "ok" ]]; then
     dns_asn_org=$(echo "$dns_info_json" | jq -r '.asn_org // empty')
     dns_country_eu=$(echo "$dns_info_json" | jq -r '.country_eu // empty')
     # Append ASN after DNS provider name (right after provider name, before other info)
-    if [[ -n "$dns_asn" ]]; then
-      resolver_display="${resolver_display/NextDNS/NextDNS • $dns_asn}"
+    # if [[ -n "$dns_asn" ]]; then
+    #   resolver_display="${resolver_display/NextDNS/NextDNS • $dns_asn}"
+    # fi
+  fi
+  # Prefer favicon based on mapped provider name (e.g., "NextDNS" → nextdns.io)
+  info_from_name="$(operator_info_map "$resolver_name")"
+  domain_from_name="${info_from_name#*|}"
+  if [[ -n "$domain_from_name" && "$domain_from_name" != "$resolver_name" ]]; then
+    dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${domain_from_name}&size=128"
+    dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
+    if [[ -n "$dns_fav_path" && -s "$dns_fav_path" ]]; then
+      dns_image_enc=$(base64 < "$dns_fav_path")
     fi
   fi
-  # Append EU flag if resolver is in the EU (based on ip.rslt.fr JSON), similar to ISP logic
-  if [[ "$dns_country_eu" == "true" && "$resolver_display" != *"🇪🇺"* ]]; then
-    resolver_display+=" 🇪🇺"
-  fi
-  if [[ -n "$dns_asn" ]]; then
+  # If no favicon from mapped name, try UI ASN logo (no redirects)
+  if [[ -z "$dns_image_enc" && -n "$dns_asn" ]]; then
     dns_asn_fmt=$(echo "$dns_asn" | tr '[:upper:]' '[:lower:]' | sed 's/as//g')
     dns_image_url="https://static.ui.com/asn/${dns_asn_fmt}_101x101.png"
     dns_logo_path="$(cache_url image "$dns_image_url" "$logo_ttl" "" 16 nofollow)"
     if [[ -n "$dns_logo_path" && -s "$dns_logo_path" ]]; then
       dns_image_enc=$(base64 < "$dns_logo_path")
     fi
-    if [[ -z "$dns_image_enc" ]]; then
-      # Prefer domain from operator_info_map based on resolver name (e.g., "NextDNS" → nextdns.io)
-      dns_whois_domain=""
-      info_from_name="$(operator_info_map "$resolver_name")"
-      domain_from_name="${info_from_name#*|}"
-      if [[ -n "$domain_from_name" && "$domain_from_name" != "$resolver_name" ]]; then
-        dns_whois_domain="$domain_from_name"
-      fi
-      # Fallback to WHOIS-based resolution if mapping did not yield a domain
-      if [[ -z "$dns_whois_domain" ]]; then
-        dns_whois_domain="$(provider_domain_for "$dns_asn" "$dns_asn_org" "$resolver_ip")"
-      fi
-      if [[ -n "$dns_whois_domain" ]]; then
-        dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${dns_whois_domain}&size=128"
-        dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
-        if [[ -n "$dns_fav_path" && -s "$dns_fav_path" ]]; then
-          dns_image_enc=$(base64 < "$dns_fav_path")
-        fi
-      fi
-    fi
   fi
-  # If no image yet (e.g., missing ASN), try favicon based on provider name mapping
+  # Finally, WHOIS-based favicon fallback
   if [[ -z "$dns_image_enc" ]]; then
-    dns_whois_domain=""
-    info_from_name="$(operator_info_map "$resolver_name")"
-    domain_from_name="${info_from_name#*|}"
-    if [[ -n "$domain_from_name" && "$domain_from_name" != "$resolver_name" ]]; then
-      dns_whois_domain="$domain_from_name"
-    fi
-    if [[ -z "$dns_whois_domain" ]]; then
-      dns_whois_domain="$(provider_domain_for "$dns_asn" "$dns_asn_org" "$resolver_ip")"
-    fi
+    dns_whois_domain="$(provider_domain_for "$dns_asn" "$dns_asn_org" "$resolver_ip")"
     if [[ -n "$dns_whois_domain" ]]; then
       dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${dns_whois_domain}&size=128"
       dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
@@ -892,6 +901,10 @@ if [[ "$nextdns_status" == "ok" ]]; then
         dns_image_enc=$(base64 < "$dns_fav_path")
       fi
     fi
+  fi
+  # Append EU flag if resolver is in the EU (based on ip.rslt.fr JSON), similar to ISP logic
+  if [[ "$dns_country_eu" == "true" && "$resolver_display" != *"🇪🇺"* ]]; then
+    resolver_display+=" 🇪🇺"
   fi
 
   dns_latency=""
@@ -939,9 +952,9 @@ if [[ "$nextdns_status" == "ok" ]]; then
       | head -n1)
   fi
   # Append PTR if not empty and not already present
-  if [[ -n "$resolver_ptr" && "$resolver_display" != *"$resolver_ptr"* ]]; then
-    resolver_display+=" • $resolver_ptr"
-  fi
+  # if [[ -n "$resolver_ptr" && "$resolver_display" != *"$resolver_ptr"* ]]; then
+  #   resolver_display+=" • $resolver_ptr"
+  # fi
   case "$lang" in
     fr)
       if [[ -n "$dns_image_enc" ]]; then
@@ -1022,9 +1035,9 @@ else
     resolver_flag=""
     resolver_info="$resolver_name"
     # Append ASN after DNS provider name (right after provider name, before other info)
-    if [[ -n "$dns_asn" ]]; then
-      resolver_info+=" • $dns_asn"
-    fi
+    # if [[ -n "$dns_asn" ]]; then
+    #   resolver_info+=" • $dns_asn"
+    # fi
     # For other resolvers: fetch city and country via ip.rslt.fr/json and build flag.
     dns_info_json=$(cache_url json "https://ip.rslt.fr/json?ip=$resolver_ip" "$IP_JSON_TTL")
     dns_country_iso=$(echo "$dns_info_json" | jq -r '.country_iso // empty')
@@ -1032,36 +1045,37 @@ else
     dns_city=$(echo "$dns_info_json" | jq -r '.city // empty')
     dns_country_eu=$(echo "$dns_info_json" | jq -r '.country_eu // empty')
 
-    # --- DNS provider logo (UI ASN, fallback to favicon) ---
+    # --- DNS provider icon: prefer favicon via mapped name, then UI ASN, then WHOIS favicon ---
     dns_image_enc=""
-    # dns_asn already set above
-    if [[ -n "$dns_asn" ]]; then
+    # 1) favicon from mapped resolver name (resolver_name already set from API or ip.rslt.fr)
+    if [[ -n "$resolver_name" ]]; then
+      info_from_name="$(operator_info_map "$resolver_name")"
+      domain_from_name="${info_from_name#*|}"
+      if [[ -n "$domain_from_name" && "$domain_from_name" != "$resolver_name" ]]; then
+        dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${domain_from_name}&size=128"
+        dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
+        if [[ -n "$dns_fav_path" && -s "$dns_fav_path" ]]; then
+          dns_image_enc=$(base64 < "$dns_fav_path")
+        fi
+      fi
+    fi
+    # 2) UI ASN logo (if favicon via mapped name not set)
+    if [[ -z "$dns_image_enc" && -n "$dns_asn" ]]; then
       dns_asn_fmt=$(echo "$dns_asn" | tr '[:upper:]' '[:lower:]' | sed 's/as//g')
       dns_image_url="https://static.ui.com/asn/${dns_asn_fmt}_101x101.png"
       dns_logo_path="$(cache_url image "$dns_image_url" "$logo_ttl" "" 16 nofollow)"
       if [[ -n "$dns_logo_path" && -s "$dns_logo_path" ]]; then
         dns_image_enc=$(base64 < "$dns_logo_path")
       fi
-      if [[ -z "$dns_image_enc" ]]; then
-        # Prefer domain from operator_info_map when the resolver name was returned by NextDNS API
-        dns_whois_domain=""
-        if [[ -n "$resolver_name_api" && "$resolver_name_api" != "null" ]]; then
-          info_from_api="$(operator_info_map "$resolver_name_api")"
-          domain_from_api="${info_from_api#*|}"
-          if [[ -n "$domain_from_api" && "$domain_from_api" != "$resolver_name_api" ]]; then
-            dns_whois_domain="$domain_from_api"
-          fi
-        fi
-        # Fallback to WHOIS-based domain if mapping did not yield a domain
-        if [[ -z "$dns_whois_domain" ]]; then
-          dns_whois_domain="$(provider_domain_for "$dns_asn" "$(echo "$dns_info_json" | jq -r '.asn_org // empty')" "$resolver_ip")"
-        fi
-        if [[ -n "$dns_whois_domain" ]]; then
-          dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${dns_whois_domain}&size=128"
-          dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
-          if [[ -n "$dns_fav_path" && -s "$dns_fav_path" ]]; then
-            dns_image_enc=$(base64 < "$dns_fav_path")
-          fi
+    fi
+    # 3) WHOIS favicon fallback
+    if [[ -z "$dns_image_enc" ]]; then
+      dns_whois_domain="$(provider_domain_for "$dns_asn" "$(echo "$dns_info_json" | jq -r '.asn_org // empty')" "$resolver_ip")"
+      if [[ -n "$dns_whois_domain" ]]; then
+        dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${dns_whois_domain}&size=128"
+        dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
+        if [[ -n "$dns_fav_path" && -s "$dns_fav_path" ]]; then
+          dns_image_enc=$(base64 < "$dns_fav_path")
         fi
       fi
     fi
@@ -1116,32 +1130,16 @@ else
         fi
       fi
       # Append PTR if not already present
-      if [[ "$resolver_info" != *"$resolver_ptr"* ]]; then
-        resolver_info+=" • $resolver_ptr"
-      fi
+      # if [[ "$resolver_info" != *"$resolver_ptr"* ]]; then
+      #   resolver_info+=" • $resolver_ptr"
+      # fi
     fi
-    # If we still have no icon, try favicon based on the (possibly remapped) resolver name, else fall back to WHOIS
-    if [[ -z "$dns_image_enc" ]]; then
-      dns_whois_domain=""
-      if [[ -n "$resolver_name" ]]; then
-        info_from_name="$(operator_info_map "$resolver_name")"
-        domain_from_name="${info_from_name#*|}"
-        if [[ -n "$domain_from_name" && "$domain_from_name" != "$resolver_name" ]]; then
-          dns_whois_domain="$domain_from_name"
-        fi
-      fi
-      if [[ -z "$dns_whois_domain" && -n "$resolver_name_api" && "$resolver_name_api" != "null" ]]; then
-        info_from_api="$(operator_info_map "$resolver_name_api")"
-        domain_from_api="${info_from_api#*|}"
-        if [[ -n "$domain_from_api" && "$domain_from_api" != "$resolver_name_api" ]]; then
-          dns_whois_domain="$domain_from_api"
-        fi
-      fi
-      if [[ -z "$dns_whois_domain" ]]; then
-        dns_whois_domain="$(provider_domain_for "$dns_asn" "$(echo "$dns_info_json" | jq -r '.asn_org // empty')" "$resolver_ip")"
-      fi
-      if [[ -n "$dns_whois_domain" ]]; then
-        dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${dns_whois_domain}&size=128"
+    # If the resolver name changed after PTR remapping and we still have no icon, try favicon via mapped name only
+    if [[ -z "$dns_image_enc" && -n "$mapped_provider" ]]; then
+      info_from_name="$(operator_info_map "$resolver_name")"
+      domain_from_name="${info_from_name#*|}"
+      if [[ -n "$domain_from_name" && "$domain_from_name" != "$resolver_name" ]]; then
+        dns_favicon_url="https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=http://${domain_from_name}&size=128"
         dns_fav_path="$(cache_url image "$dns_favicon_url" "$logo_ttl" "" 16)"
         if [[ -n "$dns_fav_path" && -s "$dns_fav_path" ]]; then
           dns_image_enc=$(base64 < "$dns_fav_path")
@@ -1431,6 +1429,38 @@ if [[ "$ts_online" == "true" ]]; then
   # Extract the Tailscale IP of the active exit node (if any), for display and status indication.
   if [[ -n "$exit_node_id" && -n "$ts_json" ]]; then
     active_exit_ip=$(echo "$ts_json" | jq -r --arg id "$exit_node_id" '.Peer[] | select(.ID == $id) | .TailscaleIPs[]? | select(test(":") | not)')
+  fi
+
+  # Suggested exit node support (tailscale exit-node suggest)
+  suggested_exit_node=""
+  if command -v tailscale &>/dev/null; then
+    suggest_out=$(tailscale exit-node suggest 2>/dev/null)
+    # Example lines:
+    # Suggested exit node: gw-fr-versailles-01.shrimp-alsephina.ts.net.
+    # To accept this suggestion, use `tailscale set --exit-node=gw-fr-versailles-01.shrimp-alsephina.ts.net.`.
+    suggested_exit_node=$(echo "$suggest_out" | awk -F': ' '/Suggested exit node:/ {print $2}')
+    # Trim backticks and trailing spaces, but **do not** remove the trailing dot
+    suggested_exit_node=$(echo "$suggested_exit_node" | sed 's/[`[:space:]]*$//')
+    # Ensure a final dot (FQDN)
+    if [[ -n "$suggested_exit_node" && "${suggested_exit_node: -1}" != "." ]]; then
+      suggested_exit_node="${suggested_exit_node}."
+    fi
+    # Debug: echo parsed value to cache file
+    echo "[$(date)] Suggested exit node parsed: '$suggested_exit_node'" > "${CACHEDIR}/tailscale_suggested_debug.log"
+  fi
+
+  # Read autosuggest follow flag ("yes" to auto-follow the suggested node)
+  autosuggest_follow=""
+  if [[ -f "$TS_AUTOSUG_FILE" ]]; then
+    autosuggest_follow=$(tr '[:upper:]' '[:lower:]' < "$TS_AUTOSUG_FILE" | tr -d '\r\n' )
+  fi
+
+  # If auto-follow is enabled and a suggestion exists, switch automatically when it changes
+  if [[ "$autosuggest_follow" == "yes" && -n "$suggested_exit_node" ]]; then
+    # If the current exit node differs from the suggestion, switch
+    if [[ -z "$exit_node_used" || "$exit_node_used" != "$suggested_exit_node" ]]; then
+      $TS_BIN set --exit-node "$suggested_exit_node" >/dev/null 2>&1 &
+    fi
   fi
 
     if [[ -n "$magicdns_org" || -n "$magicdns_domain" ]]; then
@@ -1763,15 +1793,56 @@ if [[ "$ts_online" == "true" ]]; then
               icon="􀨳"
             fi
             prefix=$(echo "$host" | awk -F'.' '{print $1}')
-            exitnodes_prive+=("--$icon $prefix | bash=\"/Applications/Tailscale.app/Contents/MacOS/Tailscale\" param1=\"set\" param2=\"--exit-node\" param3=\"$prefix\" terminal=false refresh=true")
+            exitnodes_prive+=("--$icon $prefix | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node='$prefix'\" terminal=false refresh=true")
           fi
       done <<<"$exitnodes_raw"
       exitnodes_lines+=("→ $exitnodes_label")
-      if [[ -n "$exit_node_used" ]]; then
-        exitnodes_lines+=("--Actuel : $exit_node_used")
+
+      # Suggested section: header + explicit enable/disable actions
+      if [[ -n "$suggested_exit_node" ]]; then
+        if [[ "$lang" == "fr" ]]; then
+          # Header with suggested node name (without trailing dot)
+          exitnodes_lines+=("--Recommandé • ${suggested_exit_node%.}")
+          # Actions
+          if [[ "$autosuggest_follow" == "yes" ]]; then
+            # Désactiver: only disable auto-follow, keep current exit node
+            exitnodes_lines+=("--→ Désactiver | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'\" terminal=false refresh=true")
+          else
+            # Activer: enable auto-follow AND connect to the suggested exit node now
+            exitnodes_lines+=("--→ Activer | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo yes > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node=$suggested_exit_node\" terminal=false refresh=true")
+          fi
+        else
+          # Header with suggested node name (without trailing dot)
+          exitnodes_lines+=("--Recommended • ${suggested_exit_node%.}")
+          # Actions
+          if [[ "$autosuggest_follow" == "yes" ]]; then
+            # Disable: only disable auto-follow, keep current exit node
+            exitnodes_lines+=("--→ Disable | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'\" terminal=false refresh=true")
+          else
+            # Enable: enable auto-follow AND connect to the suggested exit node now
+            exitnodes_lines+=("--→ Enable | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo yes > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node=$suggested_exit_node\" terminal=false refresh=true")
+          fi
+        fi
+        exitnodes_lines+=("-----")
       fi
-      if [[ "$exit_node_in_use" == "true" ]]; then
-        exitnodes_lines+=("--$disconnect_label | bash=\"/Applications/Tailscale.app/Contents/MacOS/Tailscale\" param1=\"set\" param2=\"--exit-node=\" terminal=false refresh=true")
+
+      # If we have an exit node in use, get its FQDN from tailscale status
+      exit_node_used_fqdn="$exit_node_used"
+      if [[ -n "$exit_node_used" ]]; then
+        fqdn_lookup=$($TS_BIN status --json 2>/dev/null | jq -r --arg node "$exit_node_used" '.Peer[]? | select(.HostName==$node) | .DNSName' | sed 's/\.$//')
+        if [[ -n "$fqdn_lookup" && "$fqdn_lookup" != "null" ]]; then
+          exit_node_used_fqdn="$fqdn_lookup"
+        fi
+      fi
+      # Current/Disconnect section: only show when an exit node is currently in use
+      if [[ "$exit_node_in_use" == "true" && -n "$exit_node_used" ]]; then
+        if [[ "$lang" == "fr" ]]; then
+          exitnodes_lines+=("--Actuel • $exit_node_used_fqdn")
+          exitnodes_lines+=("--→ Déconnecter | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node=\" terminal=false refresh=true")
+        else
+          exitnodes_lines+=("--Current • $exit_node_used_fqdn")
+          exitnodes_lines+=("--→ Disconnect | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node=\" terminal=false refresh=true")
+        fi
         exitnodes_lines+=("-----")
       fi
       if [[ ${#exitnodes_prive[@]} -gt 0 ]]; then
@@ -1823,16 +1894,16 @@ if [[ "$ts_online" == "true" ]]; then
             else
               auto_label="→ Automatic"
             fi
-            node_line="----$auto_label | bash=\"/Applications/Tailscale.app/Contents/MacOS/Tailscale\" param1=\"set\" param2=\"--exit-node\" param3=\"$_host\" terminal=false refresh=true"
+            node_line="----$auto_label | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node='$_host'\" terminal=false refresh=true"
             # Prepend to keep "Any" first in the list
             country_nodes[$found_idx]="$node_line"${country_nodes[$found_idx]:+"${country_nodes[$found_idx]}"}
             # Mark a split to separate later when other cities exist
             country_nodes[$found_idx]+="__SPLIT__"
           else
             if [[ -n "$city_display" ]]; then
-              node_line="----$icon $node_name • $city_display | bash=\"/Applications/Tailscale.app/Contents/MacOS/Tailscale\" param1=\"set\" param2=\"--exit-node\" param3=\"$_host\" terminal=false refresh=true"
+              node_line="----$icon $node_name • $city_display | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node='$_host'\" terminal=false refresh=true"
             else
-              node_line="----$icon $node_name | bash=\"/Applications/Tailscale.app/Contents/MacOS/Tailscale\" param1=\"set\" param2=\"--exit-node\" param3=\"$_host\" terminal=false refresh=true"
+              node_line="----$icon $node_name | bash=\"/bin/bash\" param1=\"-lc\" param2=\"echo no > '$TS_AUTOSUG_FILE'; $TS_BIN set --exit-node='$_host'\" terminal=false refresh=true"
             fi
             country_nodes[$found_idx]+="$node_line"$'\n'
           fi
