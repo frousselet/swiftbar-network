@@ -394,6 +394,7 @@ operator_info_map() {
     "Private Layer INC")                                echo "Private Layer|privatelayer.com" ;;
     "HostRoyale Technologies Pvt Ltd")                  echo "HostRoyale|hostroyale.com" ;;
     "Keminet SHPK")                                     echo "Keminet|keminet.net" ;;
+    "Mullvad")                                          echo "Mullvad|mullvad.net" ;;
     *)                                                  echo "${raw}|" ;;
   esac
 }
@@ -409,6 +410,7 @@ resolver_name_from_ptr() {
   case "$host" in
     *.quad9.net)            echo "Quad9" ;;
     *.pch.net)              echo "Quad9" ;;
+    *.mullvad.net)          echo "Mullvad" ;;
     *) echo "" ;;
   esac
 }
@@ -498,7 +500,6 @@ if [[ -z "$json4" && -z "$json6" ]]; then
   echo "􁣡"
   echo "---"
   echo "Error: unable to retrieve IP information | refresh=true"
-  exit 1
 fi
 
 #
@@ -653,12 +654,12 @@ ip_icons=""
 if [[ -n "$pub_ip6" ]]; then
   ip_icons+="􀃕"
 else
-  ip_icons+="􀃔"
+  ip_icons+=""
 fi
 if [[ -n "$pub_ip4" ]]; then
   ip_icons+="􀃑"
 else
-  ip_icons+="􀃐"
+  ip_icons+=""
 fi
 
 tailscale_bar_icon=""
@@ -690,7 +691,8 @@ exitnode_icon="􀄌" # Default: no exit node
 if [[ "$exit_node_in_use" == "true" ]]; then
   exitnode_icon="􀄍"
 fi
-echo "${network_icon}  ${asn_org_f} ${ip_icons}${tailscale_bar_icon}${exitnode_icon}"
+# echo "${network_icon}  ${asn_org_f} ${ip_icons}${tailscale_bar_icon}${exitnode_icon}"
+echo "${network_icon} ${asn_org_f} ${ip_icons}"
 
 echo "---"
 # Only display image if set and valid (avoid empty lines when logo is missing).
@@ -1316,7 +1318,12 @@ if [[ -n "$ssid" ]]; then
   echo "${menu_wifi}"
 
   # First line: SSID • Wi-Fi X (802.11xx) • Frequency (if present).
-  wifi_line="${wifi_quality_stars} ${ssid} • $wifi_ver ($phy)"
+  if [[ "$ssid" == "<redacted>" ]]; then
+    wifi_line="${wifi_quality_stars} $wifi_ver ($phy)"
+  else
+    wifi_line="${wifi_quality_stars} ${ssid} • $wifi_ver ($phy)"
+  fi
+
   if [[ -n "$wifi_freq_label_sp" ]]; then
     wifi_line+=" • $wifi_freq_label_sp"
   fi
@@ -1532,10 +1539,6 @@ if [[ "$ts_online" == "true" ]]; then
     fi
     ts_lines+=("$derp_info | refresh=true")
   fi
-
-
-# ICI
-
 
   # --------- PATCH: Tailscale accounts switcher ---------
   print_tailscale_accounts() {
