@@ -12,6 +12,8 @@
 # <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 # <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>
 
+# NEXTDNS_API_KEY=""
+# NEXTDNS_PROFILE_ID=""
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 
@@ -22,6 +24,8 @@ flag_from_iso() {
   local iso="$1"
   [[ -z "$iso" || ${#iso} -ne 2 ]] && { echo ""; return; }
   local upper_code; upper_code=$(echo "$iso" | tr '[:lower:]' '[:upper:]')
+
+  # Build base flag
   local out="" c ord code
   for ((i=0; i<${#upper_code}; i++)); do
     c=${upper_code:i:1}
@@ -29,6 +33,14 @@ flag_from_iso() {
     code=$((127397 + ord))
     out+=$(perl -CO -e "print chr($code)")
   done
+
+  # EU member states list
+  case "$upper_code" in
+    AT|BE|BG|HR|CY|CZ|DK|EE|FI|FR|DE|GR|HU|IE|IT|LV|LT|LU|MT|NL|PL|PT|RO|SK|SI|ES|SE)
+      out+="🇪🇺"
+      ;;
+  esac
+
   echo "$out"
 }
 
@@ -62,17 +74,40 @@ export TS_BIN
 ensure_icon_size() {
   local f="$1" size="${2:-16}" tmp="${f}.tmp"
   [[ ! -s "$f" ]] && return 1
+
+  # 1) Essayer magick si présent ; en cas d'échec, ne pas bloquer les fallbacks
   if command -v magick >/dev/null 2>&1; then
-    magick "$f" -alpha on -background none \
+    if magick "$f" -alpha on -background none \
       -thumbnail ${size}x${size}^ -gravity center -extent ${size}x${size} \
-      -unsharp 1x1+1.2+0.02 -strip "$tmp" >/dev/null 2>&1 && mv "$tmp" "$f" && return 0
-  elif command -v convert >/dev/null 2>&1; then
-    convert "$f" -alpha on -background none \
-      -thumbnail ${size}x${size}^ -gravity center -extent ${size}x${size} \
-      -unsharp 1x1+1.2+0.02 -strip "$tmp" >/dev/null 2>&1 && mv "$tmp" "$f" && return 0
-  elif command -v sips >/dev/null 2>&1; then
-    sips -z "$size" "$size" "$f" >/dev/null 2>&1 && return 0
+      -unsharp 1x1+1.2+0.02 -strip "$tmp" >/dev/null 2>&1 \
+      && [[ -s "$tmp" ]]; then
+      mv "$tmp" "$f"
+      return 0
+    else
+      rm -f "$tmp" 2>/dev/null || true
+    fi
   fi
+
+  # 2) Essayer convert si présent
+  if command -v convert >/dev/null 2>&1; then
+    if convert "$f" -alpha on -background none \
+      -thumbnail ${size}x${size}^ -gravity center -extent ${size}x${size} \
+      -unsharp 1x1+1.2+0.02 -strip "$tmp" >/dev/null 2>&1 \
+      && [[ -s "$tmp" ]]; then
+      mv "$tmp" "$f"
+      return 0
+    else
+      rm -f "$tmp" 2>/dev/null || true
+    fi
+  fi
+
+  # 3) Dernier recours : sips (toujours dispo sur macOS)
+  if command -v sips >/dev/null 2>&1; then
+    if sips -z "$size" "$size" "$f" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
   return 1
 }
 
@@ -394,7 +429,6 @@ operator_info_map() {
     "Private Layer INC")                                echo "Private Layer|privatelayer.com" ;;
     "HostRoyale Technologies Pvt Ltd")                  echo "HostRoyale|hostroyale.com" ;;
     "Keminet SHPK")                                     echo "Keminet|keminet.net" ;;
-    "Mullvad")                                          echo "Mullvad|mullvad.net" ;;
     *)                                                  echo "${raw}|" ;;
   esac
 }
@@ -410,7 +444,6 @@ resolver_name_from_ptr() {
   case "$host" in
     *.quad9.net)            echo "Quad9" ;;
     *.pch.net)              echo "Quad9" ;;
-    *.mullvad.net)          echo "Mullvad" ;;
     *) echo "" ;;
   esac
 }
@@ -456,24 +489,61 @@ provider_domain_for() {
   echo ""
 }
 
-#
-# Map Cloudflare datacenter codes to ISO 3166-1 alpha-2 country codes using dynamic JSON lookup.
+
+# Map Cloudflare datacenter codes to ISO 3166-1 alpha-2 country codes using static overrides + dynamic JSON lookup.
 cf_colo_to_iso() {
-  # Map Cloudflare colo IATA code to ISO 3166-1 alpha-2 using Cloudflare's public locations feed.
+  # Map Cloudflare colo IATA code to ISO 3166-1 alpha-2.
+  # Priority:
+  #   1. Static overrides/corrections (manual map below)
+  #   2. Cloudflare public locations feed (CF_LOC_JSON)
   # Usage: cf_colo_to_iso "CDG" -> "FR". Returns empty string on failure.
-  local code="$1"
+  local code="$1" iso=""
   [[ -z "$code" ]] && { echo ""; return; }
+
   # Normalize to uppercase
   code=$(echo "$code" | tr '[:lower:]' '[:upper:]')
-  # Prefer cached JSON; jq is already a dependency of this script.
+
+  # 1) Static overrides / manual corrections
+  #    Add any special cases here (e.g. PAR, CDG, etc.).
+  case "$code" in
+    PAR|CDG)
+      echo "FR"; return ;;
+    AMS)
+      echo "NL"; return ;;
+    FRA|NUE)
+      echo "DE"; return ;;
+    LHR)
+      echo "GB"; return ;;
+    NRT)
+      echo "JP"; return ;;
+    SIN)
+      echo "SG"; return ;;
+    SYD)
+      echo "AU"; return ;;
+    HKG)
+      echo "HK"; return ;;
+    IAD|SEA|SFO|SJC|CHI)
+      echo "US"; return ;;
+    YVR|YYZ)
+      echo "CA"; return ;;
+    BRL)
+      echo "BR"; return ;;
+    DUB)
+      echo "IE"; return ;;
+    WAW)
+      echo "PL"; return ;;
+    # Default: no static override, fall through to dynamic lookup
+  esac
+
+  # 2) Dynamic lookup via Cloudflare locations JSON (CF_LOC_JSON)
   if [[ -n "$CF_LOC_JSON" ]]; then
-    local iso
     iso=$(echo "$CF_LOC_JSON" | jq -r --arg code "$code" '.[] | select(.iata == $code) | .cca2 // empty' 2>/dev/null | head -n1)
     if [[ -n "$iso" && "$iso" != "null" ]]; then
       echo "$iso"
       return
     fi
   fi
+
   # Fallback: empty if not found or cache unavailable.
   echo ""
 }
@@ -500,6 +570,7 @@ if [[ -z "$json4" && -z "$json6" ]]; then
   echo "􁣡"
   echo "---"
   echo "Error: unable to retrieve IP information | refresh=true"
+  exit 1
 fi
 
 #
@@ -528,7 +599,6 @@ asn_org=$(jq -r '.asn_org' <<<"$json")
 asn=$(jq -r '.asn' <<<"$json")
 city=$(jq -r '.city // empty' <<<"$json")
 tz=$(jq -r '.time_zone // empty' <<<"$json")
-country_eu=$(jq -r '.country_eu // empty' <<<"$json")
 
 # Parse public IPv4 and IPv6 addresses from JSON responses.
 pub_ip4=$(jq -r '.ip // empty' <<< "$json4")
@@ -654,12 +724,12 @@ ip_icons=""
 if [[ -n "$pub_ip6" ]]; then
   ip_icons+="􀃕"
 else
-  ip_icons+=""
+  ip_icons+="􀃔"
 fi
 if [[ -n "$pub_ip4" ]]; then
   ip_icons+="􀃑"
 else
-  ip_icons+=""
+  ip_icons+="􀃐"
 fi
 
 tailscale_bar_icon=""
@@ -691,8 +761,7 @@ exitnode_icon="􀄌" # Default: no exit node
 if [[ "$exit_node_in_use" == "true" ]]; then
   exitnode_icon="􀄍"
 fi
-# echo "${network_icon}  ${asn_org_f} ${ip_icons}${tailscale_bar_icon}${exitnode_icon}"
-echo "${network_icon} ${asn_org_f} ${ip_icons}"
+echo "${network_icon}  ${asn_org_f} ${ip_icons}${tailscale_bar_icon}${exitnode_icon}"
 
 echo "---"
 # Only display image if set and valid (avoid empty lines when logo is missing).
@@ -730,11 +799,7 @@ fi
 isp_localization_line=""
 [[ -n "$city"   ]] && isp_localization_line+="${city}, "
 if [[ -n "$country" ]]; then
-  if [[ "$country_eu" == "true" ]]; then
-    isp_localization_line+="${country} ${flag} 🇪🇺"
-  else
-    isp_localization_line+="${country} ${flag}"
-  fi
+  isp_localization_line+="${country} ${flag}"
 fi
 
 echo "${isp_line} • ${isp_localization_line} | image=${image_enc}"
@@ -868,7 +933,6 @@ if [[ "$nextdns_status" == "ok" ]]; then
     dns_info_json=$(cache_url json "https://ip.rslt.fr/json?ip=$resolver_ip" "$IP_JSON_TTL")
     dns_asn=$(echo "$dns_info_json" | jq -r '.asn // empty')
     dns_asn_org=$(echo "$dns_info_json" | jq -r '.asn_org // empty')
-    dns_country_eu=$(echo "$dns_info_json" | jq -r '.country_eu // empty')
     # Append ASN after DNS provider name (right after provider name, before other info)
     # if [[ -n "$dns_asn" ]]; then
     #   resolver_display="${resolver_display/NextDNS/NextDNS • $dns_asn}"
@@ -903,10 +967,6 @@ if [[ "$nextdns_status" == "ok" ]]; then
         dns_image_enc=$(base64 < "$dns_fav_path")
       fi
     fi
-  fi
-  # Append EU flag if resolver is in the EU (based on ip.rslt.fr JSON), similar to ISP logic
-  if [[ "$dns_country_eu" == "true" && "$resolver_display" != *"🇪🇺"* ]]; then
-    resolver_display+=" 🇪🇺"
   fi
 
   dns_latency=""
@@ -1045,7 +1105,6 @@ else
     dns_country_iso=$(echo "$dns_info_json" | jq -r '.country_iso // empty')
     dns_country=$(echo "$dns_info_json" | jq -r '.country // empty')
     dns_city=$(echo "$dns_info_json" | jq -r '.city // empty')
-    dns_country_eu=$(echo "$dns_info_json" | jq -r '.country_eu // empty')
 
     # --- DNS provider icon: prefer favicon via mapped name, then UI ASN, then WHOIS favicon ---
     dns_image_enc=""
@@ -1098,10 +1157,6 @@ else
 
     if [[ -n "$resolver_flag" ]]; then
       resolver_info="${resolver_info} $resolver_flag"
-    fi
-    # Append EU flag if resolver is in the EU (based on ip.rslt.fr JSON), similar to ISP logic
-    if [[ "$dns_country_eu" == "true" ]]; then
-      resolver_info+=" 🇪🇺"
     fi
 
     if [[ "$resolver_name" == "Cloudflare" ]]; then
@@ -1318,12 +1373,7 @@ if [[ -n "$ssid" ]]; then
   echo "${menu_wifi}"
 
   # First line: SSID • Wi-Fi X (802.11xx) • Frequency (if present).
-  if [[ "$ssid" == "<redacted>" ]]; then
-    wifi_line="${wifi_quality_stars} $wifi_ver ($phy)"
-  else
-    wifi_line="${wifi_quality_stars} ${ssid} • $wifi_ver ($phy)"
-  fi
-
+  wifi_line="${wifi_quality_stars} ${ssid} • $wifi_ver ($phy)"
   if [[ -n "$wifi_freq_label_sp" ]]; then
     wifi_line+=" • $wifi_freq_label_sp"
   fi
@@ -1539,6 +1589,10 @@ if [[ "$ts_online" == "true" ]]; then
     fi
     ts_lines+=("$derp_info | refresh=true")
   fi
+
+
+# ICI
+
 
   # --------- PATCH: Tailscale accounts switcher ---------
   print_tailscale_accounts() {
